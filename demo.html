@@ -48,10 +48,6 @@
   .redis-val { border-top: 4px solid var(--redis); } .vals .val:first-child { border-top: 4px solid var(--blue); }
   .val-num.flash { animation: numflash .6s; }
   @keyframes numflash { from { color: #d97706; } }
-  .verdict { border-radius: 12px; padding: 16px 20px; margin-bottom: 20px; font-size: 20px; }
-  .verdict.ok { background: rgba(22,163,74,.1); border: 2px solid var(--green); }
-  .verdict.bad { background: rgba(220,38,38,.08); border: 2px solid var(--red); }
-  .verdict b.big { font-size: 26px; }
   .tl tr.late td { background: rgba(220,38,38,.08); }
   .tl tr.late td:nth-child(3)::after { content: "  ← đến muộn"; color: var(--red); font-weight: 700; }
   .rmore { color: var(--muted); font-size: 14px; text-align: center; margin-top: 4px; }
@@ -190,7 +186,6 @@
         <div class="card val"><div class="val-label">Giá trong Database</div><div class="val-num" id="r-db">—</div></div>
         <div class="card val redis-val"><div class="val-label">Giá trong Redis</div><div class="val-num" id="r-redis">—</div></div>
       </div>
-      <div class="verdict" id="r-verdict" style="display:none"></div>
 
       <div class="card">
         <h2>Dòng thời gian (giá trị đọc trực tiếp từ Redis và DB sau mỗi bước)</h2>
@@ -448,12 +443,6 @@ document.querySelectorAll(".tab.mode").forEach(b => b.onclick = () => {
 setMode("redis");
 
 // ---------- 3. LỆCH DỮ LIỆU (Redis khác Database) ----------
-const RACE_EXPLAIN = {
-  s1: "A set cache rồi bị chậm. Trong lúc đó B set cache và ghi DB xong. A tỉnh dậy ghi DB muộn ⇒ <b>DB bị ghi đè bằng giá cũ của A</b>.",
-  s2: "Đổi thứ tự cũng không cứu được: A ghi DB rồi bị chậm. B ghi DB và set cache xong. A set cache muộn ⇒ <b>Redis bị ghi đè bằng giá cũ của A</b>.",
-  s3: "A và B chỉ <b>xóa</b> cache, không ghi giá trị nào vào cache ⇒ A đến muộn chỉ xóa thêm lần nữa, vô hại. " +
-      "Lần đọc sau: Redis trống ⇒ MISS ⇒ đọc DB (giá đúng) ⇒ lưu lại vào Redis.",
-};
 const WHO_CLASS = { "A": "a", "B": "b", "Người đọc": "r", "Hệ thống": "sys" };
 const priceText = v => v === null ? "(trống)" : fmt(v);
 
@@ -472,7 +461,6 @@ const raceState = async () => (await fetch("/demo/race/state")).json();
 document.querySelectorAll("[data-race]").forEach(btn => btn.onclick = async () => {
   const s = btn.dataset.race, buttons = document.querySelectorAll("[data-race]");
   buttons.forEach(b => b.disabled = true);
-  $("r-verdict").style.display = "none";
   renderRace(await (await fetch("/demo/race/reset", { method: "POST" })).json());
   const poll = setInterval(async () => renderRace(await raceState()), 150);   // cập nhật giá trị thật liên tục
 
@@ -485,14 +473,6 @@ document.querySelectorAll("[data-race]").forEach(btn => btn.onclick = async () =
 
   clearInterval(poll);
   const st = await raceState(); renderRace(st);
-  const ok = st.db === st.redis;
-  $("r-verdict").className = "verdict " + (ok ? "ok" : "bad");
-  $("r-verdict").innerHTML = (ok
-      ? `<b class="big" style="color:var(--green)">✅ KHỚP</b> — Database = Redis = <b>${priceText(st.db)}</b> (đúng giá B đặt).`
-      : `<b class="big" style="color:var(--red)">❌ LỆCH</b> — Database = <b>${priceText(st.db)}</b> nhưng Redis = <b>${priceText(st.redis)}</b>.
-         Người dùng thấy giá ${priceText(st.redis)} (từ cache), hệ thống lại tính tiền theo ${priceText(st.db)}.`)
-    + `<div style="font-size:17px;margin-top:8px">${RACE_EXPLAIN[s]}</div>`;
-  $("r-verdict").style.display = "block";
   buttons.forEach(b => b.disabled = false);
 });
 </script>
