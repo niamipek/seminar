@@ -1,0 +1,18 @@
+# môi trường ảo Python (mỗi máy tự tạo lại bằng requirements.txt)
+.venv/
+__pycache__/
+*.pyc
+
+# database tạo lại được bằng: python bench/seed_db.py
+bench/shop.db
+bench/shop.db.tmp
+*.db-journal
+
+# kết quả benchmark của từng máy
+bench/results/
+
+# IDE / hệ điều hành
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

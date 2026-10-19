@@ -1,0 +1,53 @@
+{
+  "info": {
+    "name": "Demo 3 - Redis cache (kiểm tra từng bước)",
+    "description": "Chạy lần lượt từ 1 đến 5 (hoặc dùng Run collection). Xem thời gian ở góc phải ô Response và kết quả kiểm tra ở tab Test Results.\nServer: python -m uvicorn source_api:app --port 3000 --no-access-log",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:3000" },
+    { "key": "product_id", "value": "42" }
+  ],
+  "item": [
+    {
+      "name": "1. Reset (xóa cache, đưa bộ đếm về 0)",
+      "request": { "method": "POST", "url": "{{base_url}}/bench/reset" },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "pm.test('Đã xóa cache và reset bộ đếm', () => pm.expect(pm.response.json().reset).to.be.true);"
+      ] } }]
+    },
+    {
+      "name": "2. Không cache (luôn truy vấn database)",
+      "request": { "method": "GET", "url": "{{base_url}}/products/{{product_id}}" },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "const ms = pm.response.responseTime;",
+        "pm.test(`KHÔNG CACHE: ${ms} ms (đi vào database)`, () => pm.response.to.have.status(200));"
+      ] } }]
+    },
+    {
+      "name": "3. Có cache - lần 1 (MISS)",
+      "request": { "method": "GET", "url": "{{base_url}}/products-cached/{{product_id}}" },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "const ms = pm.response.responseTime;",
+        "pm.test(`MISS: ${ms} ms (Redis chưa có, đi database rồi lưu vào Redis)`, () => pm.response.to.have.status(200));"
+      ] } }]
+    },
+    {
+      "name": "4. Có cache - lần 2 (HIT)",
+      "request": { "method": "GET", "url": "{{base_url}}/products-cached/{{product_id}}" },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "const ms = pm.response.responseTime;",
+        "pm.test(`HIT: ${ms} ms (lấy thẳng từ Redis, không đụng database)`, () => pm.response.to.have.status(200));"
+      ] } }]
+    },
+    {
+      "name": "5. Thống kê (số truy vấn DB, cache hit)",
+      "request": { "method": "GET", "url": "{{base_url}}/bench/stats" },
+      "event": [{ "listen": "test", "script": { "exec": [
+        "const s = pm.response.json();",
+        "pm.test(`Database bị gọi ${s.db_queries} lần`, () => pm.expect(s.db_queries).to.be.a('number'));",
+        "pm.test(`Cache: ${s.cache_hits} HIT / ${s.cache_misses} MISS (hit rate ${s.hit_rate}%)`, () => pm.expect(s.cache_hits).to.be.a('number'));"
+      ] } }]
+    }
+  ]
+}

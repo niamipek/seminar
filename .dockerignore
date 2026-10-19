@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.vscode/
+bench/shop.db
+bench/shop.db.tmp
+bench/results/

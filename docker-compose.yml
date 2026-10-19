@@ -1,0 +1,58 @@
+# Chạy toàn bộ demo:  docker compose up --build   → mở http://localhost:3000/
+#
+#   redis     Redis server (cổng 6379)
+#   seed      tạo database SQLite lần đầu (~20-60 giây), các lần sau bỏ qua
+#   server-a  Server A  → http://localhost:3000
+#   server-b  Server B  → http://localhost:3001   (dùng cho demo 2: session dùng chung)
+
+x-app: &app
+  build: .
+  image: redis-seminar:latest
+  environment:
+    REDIS_HOST: redis
+    SHOP_DB: /data/shop.db
+  volumes:
+    - shopdata:/data
+
+services:
+  redis:
+    image: redis:7.4
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  seed:
+    <<: *app
+    command: >
+      sh -c "if [ -f /data/shop.db ]; then echo 'Database da co san, bo qua buoc tao.';
+             else python bench/seed_db.py; fi"
+    restart: "no"
+
+  server-a:
+    <<: *app
+    command: uvicorn source_api:app --host 0.0.0.0 --port 3000 --no-access-log
+    ports:
+      - "3000:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+
+  server-b:
+    <<: *app
+    command: uvicorn source_api:app --host 0.0.0.0 --port 3001 --no-access-log
+    ports:
+      - "3001:3001"
+    depends_on:
+      redis:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+
+volumes:
+  shopdata:

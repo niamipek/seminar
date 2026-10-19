@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Redis Demo</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --line: #334155; --text: #e2e8f0; --muted: #94a3b8;
+    --green: #22c55e; --orange: #f97316; --blue: #38bdf8; --red: #ef4444; --redis: #dc382d;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 18px/1.5 system-ui, "Segoe UI", sans-serif; }
+  header { padding: 18px 32px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: center; }
+  header h1 { font-size: 22px; margin: 0 24px 0 0; }
+  .tab { background: none; border: 1px solid var(--line); color: var(--muted); padding: 8px 20px;
+         border-radius: 8px; font-size: 18px; cursor: pointer; }
+  .tab.active { background: var(--blue); color: #0f172a; border-color: var(--blue); font-weight: 600; }
+  main { padding: 24px 32px; display: grid; grid-template-columns: 1fr 380px; gap: 24px; max-width: 1400px; margin: auto; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+  section.view { display: none; } section.view.active { display: block; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+  .card h2 { margin: 0 0 12px; font-size: 18px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+  button.act { background: var(--blue); color: #0f172a; border: 0; padding: 10px 18px; border-radius: 8px;
+               font-size: 17px; font-weight: 600; cursor: pointer; margin: 0 8px 8px 0; }
+  button.act:hover { filter: brightness(1.1); }
+  button.act.warn { background: var(--orange); } button.act.ghost { background: #475569; color: var(--text); }
+  button:disabled { opacity: .5; cursor: wait; }
+  input[type=number] { width: 130px; font-size: 17px; padding: 8px; border-radius: 8px; background: #0f172a;
+                       color: var(--text); border: 1px solid var(--line); margin-right: 8px; }
+  .stats { font-size: 22px; font-weight: 600; margin-bottom: 12px; font-variant-numeric: tabular-nums; }
+  .stats b { color: var(--redis); }
+  .note { color: var(--muted); font-size: 15px; margin-top: 4px; }
+  .sub { font-size: 18px; color: var(--muted); }
+  table.cmp { width: 100%; border-collapse: collapse; margin-top: 12px; font-variant-numeric: tabular-nums; }
+  table.cmp th, table.cmp td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+  table.cmp th { color: var(--muted); font-weight: 600; font-size: 15px; }
+  /* tab 3: lệch dữ liệu */
+  .who { display: inline-block; min-width: 30px; text-align: center; padding: 1px 8px; border-radius: 6px;
+         font-weight: 700; color: #0f172a; margin-right: 6px; }
+  .who.a { background: #fbbf24; } .who.b { background: #a78bfa; } .who.r { background: var(--green); }
+  .who.sys { background: #475569; color: var(--text); }
+  .vals { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .val { text-align: center; } .val-label { color: var(--muted); font-size: 16px; text-transform: uppercase; letter-spacing: .05em; }
+  .val-num { font-size: 48px; font-weight: 800; font-variant-numeric: tabular-nums; transition: color .3s; }
+  .redis-val { border-top: 4px solid var(--redis); } .vals .val:first-child { border-top: 4px solid var(--blue); }
+  .val-num.flash { animation: numflash .6s; }
+  @keyframes numflash { from { color: #fbbf24; } }
+  .verdict { border-radius: 12px; padding: 16px 20px; margin-bottom: 20px; font-size: 20px; }
+  .verdict.ok { background: rgba(34,197,94,.15); border: 2px solid var(--green); }
+  .verdict.bad { background: rgba(239,68,68,.15); border: 2px solid var(--red); }
+  .verdict b.big { font-size: 26px; }
+  .tl tr.late td { background: rgba(239,68,68,.12); }
+  .tl tr.late td:nth-child(3)::after { content: "  ← đến muộn"; color: var(--red); font-weight: 700; }
+  .rmore { color: var(--muted); font-size: 14px; text-align: center; margin-top: 4px; }
+  select { font-size: 17px; padding: 9px; border-radius: 8px; background: #0f172a; color: var(--text); border: 1px solid var(--line); }
+
+  /* flow diagram */
+  .flow { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .node { flex: 0 0 150px; text-align: center; border: 2px solid var(--line); border-radius: 12px; padding: 14px 8px;
+          background: #0f172a; transition: .25s; }
+  .node b { display: block; font-size: 19px; } .node small { color: var(--muted); font-size: 14px; }
+  .node.redis { border-color: var(--redis); }
+  .node.on { box-shadow: 0 0 0 4px rgba(56,189,248,.35); border-color: var(--blue); }
+  .node.hit { box-shadow: 0 0 0 4px rgba(34,197,94,.45); border-color: var(--green); }
+  .node.miss { box-shadow: 0 0 0 4px rgba(249,115,22,.45); border-color: var(--orange); }
+  .arrow { flex: 1; height: 6px; background: var(--line); border-radius: 3px; position: relative; overflow: hidden; }
+  .arrow.on::after { content: ""; position: absolute; top: 0; left: -40%; width: 40%; height: 100%;
+                     background: var(--blue); animation: slide .8s linear infinite; }
+  .arrow.slow::after { background: var(--orange); animation-duration: 1.6s; }
+  @keyframes slide { to { left: 100%; } }
+  .caption { text-align: center; margin-top: 14px; min-height: 52px; font-size: 20px; }
+
+  .result { display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; margin-top: 8px; }
+  .badge { padding: 4px 14px; border-radius: 999px; font-weight: 700; font-size: 20px; }
+  .badge.hit { background: var(--green); color: #052e16; } .badge.miss { background: var(--orange); color: #431407; }
+  .badge.ok { background: var(--green); color: #052e16; } .badge.err { background: var(--red); color: #fff; }
+  .ms { font-size: 40px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+
+  /* redis panel */
+  .rkey { border: 1px solid var(--line); border-left: 4px solid var(--redis); border-radius: 8px; padding: 10px 12px;
+          margin-bottom: 10px; background: #0f172a; font-family: Consolas, monospace; font-size: 14px; word-break: break-all; }
+  .rkey .k { color: #fca5a5; font-weight: 700; font-size: 15px; }
+  .rkey .v { color: var(--muted); margin-top: 4px; }
+  .ttl { height: 6px; background: var(--line); border-radius: 3px; margin-top: 8px; overflow: hidden; }
+  .ttl > i { display: block; height: 100%; background: var(--green); transition: width 1s linear; }
+  .ttl-txt { font-size: 14px; color: var(--green); margin-top: 4px; }
+  .empty { color: var(--muted); font-style: italic; }
+
+  .sid { font-family: Consolas, monospace; font-size: 15px; background: #0f172a; border: 1px dashed var(--line);
+         padding: 8px 12px; border-radius: 8px; word-break: break-all; color: var(--blue); min-height: 40px; }
+  .servers { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 700px) { .servers { grid-template-columns: 1fr; } }
+  .server { border-top: 4px solid var(--blue); }
+  .server.b { border-top-color: #a78bfa; }
+  .server h3 { margin: 0 0 4px; font-size: 22px; } .server .port { font-family: Consolas, monospace; color: var(--muted); }
+  .server.flash { animation: flash .8s; }
+  @keyframes flash { from { box-shadow: 0 0 0 6px rgba(56,189,248,.5); } to { box-shadow: none; } }
+  .tab.mode { font-size: 16px; padding: 6px 14px; }
+  pre { margin: 8px 0 0; background: #0f172a; padding: 12px; border-radius: 8px; font-size: 15px; overflow: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Redis Demo</h1>
+  <button class="tab active" data-view="cache">1. Caching</button>
+  <button class="tab" data-view="session">2. Session storage</button>
+  <button class="tab" data-view="race">3. Lệch dữ liệu</button>
+</header>
+
+<main>
+  <div>
+    <!-- ================= CACHING ================= -->
+    <section class="view active" id="view-cache">
+      <div class="card">
+        <h2>Luồng dữ liệu (cache-aside)</h2>
+        <div class="flow">
+          <div class="node" id="c-client"><b>Trình duyệt</b><small>người dùng</small></div>
+          <div class="arrow" id="c-a1"></div>
+          <div class="node redis" id="c-redis"><b>Redis</b><small>cache, rất nhanh</small></div>
+          <div class="arrow" id="c-a2"></div>
+          <div class="node" id="c-api"><b>Database</b><small>SQLite · 200.000 người dùng · 1 triệu đơn hàng</small></div>
+        </div>
+        <div class="caption" id="c-caption">Bấm “Lấy dữ liệu” để bắt đầu.</div>
+      </div>
+
+      <div class="card">
+        <h2>Bước 1: Lấy hồ sơ người dùng (qua cache)</h2>
+        <label>Mã người dùng (1 – 200.000):
+          <input type="number" id="c-uid" min="1" max="200000" value="1"></label>
+        <button class="act" id="c-fetch">Lấy dữ liệu</button>
+        <button class="act warn" id="c-clear">Xóa cache</button>
+        <div class="result" id="c-result"></div>
+        <pre id="c-json" style="display:none"></pre>
+      </div>
+
+      <div class="card">
+        <h2>Bước 2: Dữ liệu lớn — không Redis vs có Redis</h2>
+        <div class="stats" id="c-stats">Redis đang chứa: …</div>
+        <button class="act warn" id="c-db50">① Truy vấn database 50 người (không Redis)</button>
+        <button class="act" id="c-import">② Import dữ liệu Redis</button>
+        <button class="act" id="c-test50">③ Truy vấn lại 50 người đó qua Redis</button>
+        <div class="caption" id="c-test-result" style="text-align:left"></div>
+        <table class="cmp" id="c-cmp" style="display:none">
+          <thead><tr><th></th><th>Lấy dữ liệu từ</th><th>Số người</th><th>Trung bình / người</th><th>Tổng thời gian</th></tr></thead>
+          <tbody>
+            <tr><td><span class="badge miss">① Không Redis</span></td><td>Database</td><td id="cmp-db-n">—</td><td id="cmp-db-avg">—</td><td id="cmp-db-total">—</td></tr>
+            <tr><td><span class="badge hit">③ Có Redis</span></td><td id="cmp-rd-src">Redis</td><td id="cmp-rd-n">—</td><td id="cmp-rd-avg">—</td><td id="cmp-rd-total">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ================= SESSION ================= -->
+    <section class="view" id="view-session">
+      <div class="card">
+        <div>Session lưu ở:
+          <button class="tab mode active" data-mode="redis">Redis (dùng chung)</button>
+          <button class="tab mode" data-mode="memory">RAM riêng của từng server</button>
+        </div>
+        <div class="caption" id="s-mode-note" style="text-align:left;font-size:17px"></div>
+      </div>
+
+      <div class="card">
+        <label>Đăng nhập là: <select id="s-user">
+          <option value="1">Nguyen Van A</option><option value="2">Tran Thi B</option><option value="3">Le Van C</option>
+        </select></label>
+        <h2 style="margin-top:14px">session_id trình duyệt đang giữ</h2>
+        <div class="sid" id="s-sid"><span class="empty">(chưa đăng nhập)</span></div>
+      </div>
+
+      <div class="servers" id="s-servers"></div>
+    </section>
+
+    <!-- ================= LỆCH DỮ LIỆU ================= -->
+    <section class="view" id="view-race">
+      <div class="card">
+        <h2>Khi Redis khác Database: 2 request cùng đổi giá sản phẩm 7</h2>
+        <div>
+          <button class="act warn" data-race="s1">Kịch bản 1: Set cache → ghi DB</button>
+          <button class="act warn" data-race="s2">Kịch bản 2: Ghi DB → set cache</button>
+          <button class="act" data-race="s3">Kịch bản 3: Ghi DB → xóa cache</button>
+        </div>
+      </div>
+
+      <div class="vals">
+        <div class="card val"><div class="val-label">Giá trong Database</div><div class="val-num" id="r-db">—</div></div>
+        <div class="card val redis-val"><div class="val-label">Giá trong Redis</div><div class="val-num" id="r-redis">—</div></div>
+      </div>
+      <div class="verdict" id="r-verdict" style="display:none"></div>
+
+      <div class="card">
+        <h2>Dòng thời gian (giá trị đọc trực tiếp từ Redis và DB sau mỗi bước)</h2>
+        <table class="cmp tl">
+          <thead><tr><th>Thời điểm</th><th>Ai</th><th>Hành động</th><th>Redis sau bước</th><th>DB sau bước</th></tr></thead>
+          <tbody id="r-events"><tr><td colspan="5" class="empty">Bấm một kịch bản để bắt đầu.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- ================= REDIS LIVE ================= -->
+  <aside>
+    <div class="card">
+      <h2 style="color:var(--redis)">Bên trong Redis (trực tiếp)</h2>
+      <div id="redis-keys"><span class="empty">Redis đang trống.</span></div>
+    </div>
+  </aside>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let sessionId = null;
+const TTL_MAX = {};      // key -> TTL lớn nhất đã thấy, để vẽ thanh còn lại
+
+// ---------- tabs ----------
+document.querySelectorAll("header .tab").forEach(b => b.onclick = () => {
+  document.querySelectorAll("header .tab").forEach(x => x.classList.toggle("active", x === b));
+  document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + b.dataset.view));
+});
+
+// ---------- Redis live panel ----------
+const fmt = n => n.toLocaleString("vi-VN");
+
+async function refreshRedis() {
+  try {
+    const r = await (await fetch("/demo/redis")).json();
+    $("c-stats").innerHTML = `Redis đang chứa: <b>${fmt(r.total_keys)}</b> key · <b>${fmt(r.used_memory_mb)} MB</b> RAM`;
+    const box = $("redis-keys");
+    if (!r.items.length) { box.innerHTML = '<span class="empty">Redis đang trống.</span>'; return; }
+    const more = r.total_keys - r.items.length;
+    box.innerHTML = r.items.map(it => {
+      TTL_MAX[it.key] = Math.max(TTL_MAX[it.key] || 0, it.ttl);
+      const pct = it.ttl > 0 ? Math.min(100, it.ttl / TTL_MAX[it.key] * 100) : 0;
+      const short = it.key.length > 28 ? it.key.slice(0, 28) + "…" : it.key;
+      const val = it.value.length > 140 ? it.value.slice(0, 140) + "…" : it.value;
+      return `<div class="rkey"><div class="k">${short}</div><div class="v">${val}</div>
+        <div class="ttl"><i style="width:${pct}%"></i></div>
+        <div class="ttl-txt">hết hạn sau ${it.ttl < 0 ? "∞" : it.ttl + " giây"}</div></div>`;
+    }).join("") + (more > 0
+      ? `<div class="rmore">… và ${fmt(more)} key khác (tổng ${fmt(r.used_memory_mb)} MB)</div>` : "");
+  } catch (e) { $("redis-keys").textContent = "Không đọc được Redis."; }
+}
+setInterval(refreshRedis, 1000); refreshRedis();
+
+// ---------- 1. CACHING ----------
+const clearFlow = () => ["c-client","c-redis","c-api"].forEach(i => $(i).className = "node" + (i==="c-redis"?" redis":""))
+                         || ["c-a1","c-a2"].forEach(i => $(i).className = "arrow");
+
+// gọi server, trả về { status, j, total }  (total = thời gian người dùng thật sự chờ, đo ở trình duyệt)
+async function getUser(uid) {
+  const t0 = performance.now();
+  const res = await fetch("/demo/cache/" + uid);
+  const j = await res.json();
+  return { status: res.status, j, total: performance.now() - t0 };
+}
+
+$("c-fetch").onclick = async () => {
+  const uid = $("c-uid").value, btn = $("c-fetch");
+  btn.disabled = true; clearFlow();
+  $("c-client").classList.add("on"); $("c-a1").classList.add("on");
+  $("c-caption").textContent = `Trình duyệt hỏi Redis: “Có hồ sơ user:${uid} chưa?”`;
+  // nếu sau 40ms vẫn chưa có kết quả => Redis không có (MISS) => đang chờ database
+  const waitTimer = setTimeout(() => {
+    $("c-redis").classList.add("miss"); $("c-a2").classList.add("on", "slow"); $("c-api").classList.add("on");
+    $("c-caption").innerHTML = "<b style='color:var(--orange)'>Redis chưa có</b> → database đang quét 1 triệu đơn hàng…";
+  }, 40);
+  const { status, j, total } = await getUser(uid);
+  clearTimeout(waitTimer); clearFlow(); btn.disabled = false;
+  if (status !== 200) {
+    $("c-caption").textContent = j.detail || "Lỗi"; $("c-result").innerHTML = ""; $("c-json").style.display = "none";
+    return;
+  }
+  const hit = j.source === "redis";
+  $("c-client").classList.add("on");
+  if (hit) {
+    $("c-a1").classList.add("on"); $("c-redis").classList.add("hit");
+    $("c-caption").innerHTML = "<b style='color:var(--green)'>Redis có sẵn</b> → trả về ngay, không cần hỏi database";
+  } else {
+    $("c-redis").classList.add("miss"); $("c-api").classList.add("miss");
+    $("c-caption").innerHTML = `Database trả kết quả → server <b>tự lưu vào Redis</b> (TTL ${j.ttl / 60} phút) cho lần sau`;
+  }
+  $("c-result").innerHTML = `<span class="badge ${hit ? "hit" : "miss"}">${hit ? "CACHE HIT" : "CACHE MISS"}</span>
+     <span class="ms">${j.ms.toFixed(2)} ms</span>
+     <span class="sub">xử lý ở server · người dùng chờ tổng cộng ${total.toFixed(0)} ms</span>`;
+  $("c-json").style.display = "block"; $("c-json").textContent = JSON.stringify(j.data, null, 2);
+  refreshRedis();
+};
+
+// Bước 2: ① database 50 người  →  ② import (cache warming)  →  ③ cùng 50 người qua Redis
+const step3Buttons = ["c-db50", "c-import", "c-test50", "c-clear"];
+const lockStep3 = on => step3Buttons.forEach(id => $(id).disabled = on);
+let sampleIds = null;    // 50 mã người dùng dùng chung cho ① và ③ để so sánh công bằng
+const newSample = () => Array.from({ length: 50 }, () => 1 + Math.floor(Math.random() * 200000));
+const results = {};      // "db" | "redis" -> { avg, total, hits, misses }
+
+// gửi lần lượt từng request (đo riêng từng lần), trả về thống kê
+async function run50(urlPrefix, label) {
+  const runs = [], t0 = performance.now();
+  for (let i = 0; i < sampleIds.length; i++) {
+    $("c-test-result").textContent = `${label}: ${i + 1}/${sampleIds.length}…`;
+    const j = await (await fetch(urlPrefix + sampleIds[i])).json();
+    runs.push({ hit: j.source === "redis", ms: j.ms });
+  }
+  return {
+    avg: runs.reduce((s, x) => s + x.ms, 0) / runs.length,
+    total: performance.now() - t0,
+    hits: runs.filter(x => x.hit).length, misses: runs.filter(x => !x.hit).length,
+  };
+}
+
+function showCompare() {
+  $("c-cmp").style.display = "table";
+  const set = (p, r) => {
+    $(`cmp-${p}-n`).textContent = r ? sampleIds.length : "—";
+    $(`cmp-${p}-avg`).textContent = r ? `${r.avg.toFixed(2)} ms` : "—";
+    $(`cmp-${p}-total`).textContent = r ? `${(r.total / 1000).toFixed(2)} giây` : "—";
+  };
+  set("db", results.db); set("rd", results.redis);
+  const rd = results.redis;
+  $("cmp-rd-src").textContent = !rd ? "Redis"
+    : rd.misses ? `Redis (${rd.hits} HIT) + Database (${rd.misses} MISS)` : `Redis (${rd.hits}/${rd.hits} HIT)`;
+}
+
+$("c-db50").onclick = async () => {
+  lockStep3(true);
+  sampleIds = newSample(); delete results.redis;
+  results.db = await run50("/demo/db/user/", "① Đang truy vấn database (không Redis)");
+  $("c-test-result").innerHTML = `① Xong: 50 người, mỗi người database quét 1 triệu đơn hàng.`;
+  showCompare(); lockStep3(false);
+};
+
+$("c-import").onclick = async () => {
+  lockStep3(true);
+  const t0 = performance.now();
+  const tick = setInterval(() => {
+    $("c-test-result").textContent = `Đang import hồ sơ 200.000 người dùng vào Redis… ${((performance.now() - t0) / 1000).toFixed(0)} giây`;
+  }, 250);
+  try {
+    const j = await (await fetch("/demo/cache/import", { method: "POST" })).json();
+    $("c-test-result").innerHTML = `Đã import <b>${fmt(j.imported)}</b> hồ sơ trong <b>${j.seconds} giây</b> →
+      Redis đang chứa ${fmt(j.total_keys)} key · ${fmt(j.used_memory_mb)} MB`;
+  } finally { clearInterval(tick); lockStep3(false); refreshRedis(); }
+};
+
+$("c-test50").onclick = async () => {
+  lockStep3(true);
+  if (!sampleIds) sampleIds = newSample();
+  const r = results.redis = await run50("/demo/cache/", "③ Đang truy vấn lại qua Redis");
+  $("c-test-result").innerHTML = r.misses
+    ? `③ Xong: ${r.hits} HIT, ${r.misses} MISS. <b>Chưa import</b> nên có người Redis chưa có, phải đi database.`
+    : `③ Xong: cả 50 người đều lấy từ Redis, không chạm database.`;
+  showCompare(); lockStep3(false); refreshRedis();
+};
+
+// trạng thái đăng nhập của phần 2
+function setLogin(sid, server) {
+  sessionId = sid; loginServer = server;
+  showSid();
+}
+
+$("c-clear").onclick = async () => {
+  lockStep3(true);
+  const j = await (await fetch("/demo/cache", { method: "DELETE" })).json();
+  clearFlow(); $("c-caption").textContent = `Đã xóa ${fmt(j.deleted)} hồ sơ khỏi cache. Lần lấy tiếp theo sẽ là MISS.`;
+  $("c-result").innerHTML = ""; $("c-json").style.display = "none"; $("c-test-result").textContent = "";
+  lockStep3(false); refreshRedis();
+};
+
+// ---------- 2. SESSION (2 server dùng chung / không dùng chung kho session) ----------
+const SERVERS = [
+  { id: "a", name: "Server A", url: "http://localhost:3000" },
+  { id: "b", name: "Server B", url: "http://localhost:3001" },
+];
+let mode = "redis";          // "redis" | "memory"
+let loginServer = null;      // server đã cấp session hiện tại
+
+const MODE_NOTE = {
+  redis: "Mọi server cùng đọc/ghi <b style='color:var(--redis)'>một Redis</b>, nên session tạo ở Server A thì Server B cũng thấy.",
+  memory: "Mỗi server giữ session trong <b style='color:var(--orange)'>RAM riêng</b> (biến Python), nên Server B không biết session do Server A tạo.",
+};
+
+function showSid() {
+  $("s-sid").innerHTML = sessionId
+    ? `${sessionId}<br><small style="color:var(--muted)">cấp bởi ${loginServer ?? "?"}</small>`
+    : '<span class="empty">(chưa đăng nhập)</span>';
+}
+function showResult(srv, status, body) {
+  const ok = status < 300;
+  $("res-" + srv.id).innerHTML = status
+    ? `<span class="badge ${ok ? "ok" : "err"}">HTTP ${status}</span> <span>${ok ? "nhận ra người dùng" : "không nhận ra"}</span>`
+    : `<span class="badge err">Không kết nối được</span>`;
+  $("json-" + srv.id).style.display = "block";
+  $("json-" + srv.id).textContent = JSON.stringify(body, null, 2);
+  const card = $("srv-" + srv.id); card.classList.remove("flash"); void card.offsetWidth; card.classList.add("flash");
+}
+async function call(srv, method, path) {
+  const prefix = mode === "memory" ? "/memory" : "";
+  try {
+    const res = await fetch(srv.url + prefix + path, {
+      method, headers: sessionId ? { "X-Session-Id": sessionId } : {},
+    });
+    return [res.status, await res.json()];
+  } catch (e) {
+    return [0, { error: `${srv.url} chưa chạy. Mở terminal: python source_api.py ${srv.url.split(":").pop()}` }];
+  }
+}
+
+$("s-servers").innerHTML = SERVERS.map(s => `
+  <div class="card server ${s.id}" id="srv-${s.id}">
+    <h3>${s.name}</h3><div class="port">${s.url}</div><br>
+    <button class="act" data-srv="${s.id}" data-do="login">Đăng nhập</button>
+    <button class="act" data-srv="${s.id}" data-do="profile">Xem profile</button>
+    <button class="act warn" data-srv="${s.id}" data-do="logout">Đăng xuất</button>
+    <div class="result" id="res-${s.id}"></div>
+    <pre id="json-${s.id}" style="display:none"></pre>
+  </div>`).join("");
+
+$("s-servers").onclick = async e => {
+  const btn = e.target.closest("button[data-do]"); if (!btn) return;
+  const srv = SERVERS.find(s => s.id === btn.dataset.srv), action = btn.dataset.do;
+  if (action === "login") {
+    const [st, j] = await call(srv, "POST", "/login?user_id=" + $("s-user").value);
+    if (st === 200) setLogin(j.session_id, srv.name);
+    showResult(srv, st, j);
+  } else if (action === "profile") {
+    showResult(srv, ...(await call(srv, "GET", "/profile")));
+  } else {
+    showResult(srv, ...(await call(srv, "POST", "/logout")));   // giữ sessionId để bấm lại sẽ thấy 401
+  }
+  refreshRedis();
+};
+
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll(".tab.mode").forEach(x => x.classList.toggle("active", x.dataset.mode === m));
+  $("s-mode-note").innerHTML = MODE_NOTE[mode];
+  SERVERS.forEach(s => { $("res-" + s.id).innerHTML = ""; $("json-" + s.id).style.display = "none"; });
+}
+// đổi chế độ => session cũ không còn ý nghĩa ở chế độ mới, nên xóa
+document.querySelectorAll(".tab.mode").forEach(b => b.onclick = () => {
+  setMode(b.dataset.mode); setLogin(null, null);
+});
+setMode("redis");
+
+// ---------- 3. LỆCH DỮ LIỆU (Redis khác Database) ----------
+const RACE_EXPLAIN = {
+  s1: "A set cache rồi bị chậm. Trong lúc đó B set cache và ghi DB xong. A tỉnh dậy ghi DB muộn ⇒ <b>DB bị ghi đè bằng giá cũ của A</b>.",
+  s2: "Đổi thứ tự cũng không cứu được: A ghi DB rồi bị chậm. B ghi DB và set cache xong. A set cache muộn ⇒ <b>Redis bị ghi đè bằng giá cũ của A</b>.",
+  s3: "A và B chỉ <b>xóa</b> cache, không ghi giá trị nào vào cache ⇒ A đến muộn chỉ xóa thêm lần nữa, vô hại. " +
+      "Lần đọc sau: Redis trống ⇒ MISS ⇒ đọc DB (giá đúng) ⇒ lưu lại vào Redis.",
+};
+const WHO_CLASS = { "A": "a", "B": "b", "Người đọc": "r", "Hệ thống": "sys" };
+const priceText = v => v === null ? "(trống)" : fmt(v);
+
+function renderRace(st) {
+  for (const [id, v] of [["r-db", st.db], ["r-redis", st.redis]]) {
+    const el = $(id), txt = priceText(v);
+    if (el.textContent !== txt) { el.textContent = txt; el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash"); }
+  }
+  $("r-events").innerHTML = st.events.map(e => `<tr class="${e.late ? "late" : ""}">
+      <td>${e.t.toFixed(2)} s</td>
+      <td><span class="who ${WHO_CLASS[e.who] || "sys"}">${e.who}</span></td>
+      <td>${e.action}</td><td>${priceText(e.redis)}</td><td>${priceText(e.db)}</td></tr>`).join("");
+}
+const raceState = async () => (await fetch("/demo/race/state")).json();
+
+document.querySelectorAll("[data-race]").forEach(btn => btn.onclick = async () => {
+  const s = btn.dataset.race, buttons = document.querySelectorAll("[data-race]");
+  buttons.forEach(b => b.disabled = true);
+  $("r-verdict").style.display = "none";
+  renderRace(await (await fetch("/demo/race/reset", { method: "POST" })).json());
+  const poll = setInterval(async () => renderRace(await raceState()), 150);   // cập nhật giá trị thật liên tục
+
+  // 2 request HTTP thật chạy song song: A (bị chậm) đi trước, B đi sau 0,3 giây
+  const a = fetch(`/demo/race/write?who=A&price=100000&strategy=${s}&delay=1.5`, { method: "POST" });
+  await sleep(300);
+  await fetch(`/demo/race/write?who=B&price=200000&strategy=${s}`, { method: "POST" });
+  await a;
+  if (s === "s3") { await sleep(700); await fetch("/demo/race/read"); }   // người dùng xem giá sau khi cập nhật
+
+  clearInterval(poll);
+  const st = await raceState(); renderRace(st);
+  const ok = st.db === st.redis;
+  $("r-verdict").className = "verdict " + (ok ? "ok" : "bad");
+  $("r-verdict").innerHTML = (ok
+      ? `<b class="big" style="color:var(--green)">✅ KHỚP</b> — Database = Redis = <b>${priceText(st.db)}</b> (đúng giá B đặt).`
+      : `<b class="big" style="color:var(--red)">❌ LỆCH</b> — Database = <b>${priceText(st.db)}</b> nhưng Redis = <b>${priceText(st.redis)}</b>.
+         Người dùng thấy giá ${priceText(st.redis)} (từ cache), hệ thống lại tính tiền theo ${priceText(st.db)}.`)
+    + `<div style="font-size:17px;margin-top:8px">${RACE_EXPLAIN[s]}</div>`;
+  $("r-verdict").style.display = "block";
+  buttons.forEach(b => b.disabled = false);
+});
+</script>
+</body>
+</html>
