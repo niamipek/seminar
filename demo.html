@@ -97,6 +97,13 @@
   @keyframes flash { from { box-shadow: 0 0 0 6px rgba(2,132,199,.35); } to { box-shadow: none; } }
   .tab.mode { font-size: 16px; padding: 6px 14px; }
   pre { margin: 8px 0 0; background: var(--inset); padding: 12px; border-radius: 8px; font-size: 15px; overflow: auto; }
+  .badge.mc { background: var(--blue); color: #fff; }
+  .badge.redis { background: var(--redis); color: #fff; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
+  @media (max-width: 800px) { .grid-2 { grid-template-columns: 1fr; } }
+  .box-stat { background: var(--inset); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+  .steplist { list-style: none; padding-left: 0; margin: 8px 0; font-size: 15px; }
+  .steplist li { padding: 5px 0; border-bottom: 1px dashed var(--line); }
 </style>
 </head>
 <body>
@@ -105,6 +112,7 @@
   <button class="tab active" data-view="cache">1. Caching</button>
   <button class="tab" data-view="session">2. Session storage</button>
   <button class="tab" data-view="race">3. Lệch dữ liệu</button>
+  <button class="tab" data-view="compare">4. So sánh Redis vs Memcached</button>
 </header>
 
 <main>
@@ -193,6 +201,142 @@
           <thead><tr><th>Thời điểm</th><th>Ai</th><th>Hành động</th><th>Redis sau bước</th><th>DB sau bước</th></tr></thead>
           <tbody id="r-events"><tr><td colspan="5" class="empty">Bấm một kịch bản để bắt đầu.</td></tr></tbody>
         </table>
+      </div>
+    </section>
+
+    <!-- ================= SO SÁNH REDIS VS MEMCACHED ================= -->
+    <section class="view" id="view-compare">
+      <div class="card">
+        <h2>Bảng đối chiếu kỹ thuật cốt lõi</h2>
+        <div style="overflow-x:auto">
+          <table class="cmp">
+            <thead>
+              <tr>
+                <th>Tiêu chí</th>
+                <th><span class="badge redis">Redis</span></th>
+                <th><span class="badge mc">Memcached</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><b>Mô hình xử lý luồng</b></td>
+                <td>Single-threaded Event Loop (I/O Multiplexing)</td>
+                <td>Multi-threaded (tận dụng tối đa nhiều CPU cores)</td>
+              </tr>
+              <tr>
+                <td><b>Cấu trúc dữ liệu</b></td>
+                <td>String, Hash, List, Set, Sorted Set, Bitmaps, Streams...</td>
+                <td>Thuần túy Key-Value (String / Raw Bytes)</td>
+              </tr>
+              <tr>
+                <td><b>Lưu trữ bền vững (Persistence)</b></td>
+                <td>RDB Snapshot + AOF log (khôi phục sau restart)</td>
+                <td>Không có (Volatile in-memory - mất 100% khi tắt)</td>
+              </tr>
+              <tr>
+                <td><b>Giới hạn kích thước Value</b></td>
+                <td>Tối đa 512 MB / value</td>
+                <td>Mặc định tối đa 1 MB / value</td>
+              </tr>
+              <tr>
+                <td><b>Thao tác cấu trúc con</b></td>
+                <td>Sửa trực tiếp trên server (HSET, HINCRBY, LPUSH...)</td>
+                <td>Client phải tải toàn bộ JSON về, sửa rồi đẩy lại</td>
+              </tr>
+              <tr>
+                <td><b>Replication & Clustering</b></td>
+                <td>Master-Replica, Redis Sentinel, Redis Cluster</td>
+                <td>Không có sẵn (dựa vào client consistent hashing)</td>
+              </tr>
+              <tr>
+                <td><b>Tính năng nâng cao</b></td>
+                <td>Pub/Sub, Lua Scripting, Transactions, Geospatial...</td>
+                <td>Chỉ get/set/cas, cực kỳ tinh gọn cho cache tĩnh</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Thử nghiệm 1: Đo tốc độ đọc / ghi hàng loạt (Round-Trip Latency)</h2>
+        <p class="note">Đo thời gian thực thi tuần tự N thao tác ghi và đọc trên cùng mạng nội bộ Docker để so sánh độ trễ mỗi operation.</p>
+        <div style="margin-bottom:12px">
+          <button class="act" id="cmp-btn-500">Chạy đo 500 items</button>
+          <button class="act" id="cmp-btn-1000">Chạy đo 1.000 items</button>
+          <button class="act warn" id="cmp-btn-flush">Dọn dẹp dữ liệu test</button>
+        </div>
+        <div class="caption" id="cmp-speed-caption" style="text-align:left;font-size:17px">Nhấn nút bên trên để bắt đầu đo tải.</div>
+        <table class="cmp" id="cmp-speed-table" style="display:none;margin-top:14px">
+          <thead>
+            <tr>
+              <th>Hệ thống</th>
+              <th>Thời gian Ghi</th>
+              <th>Tốc độ Ghi</th>
+              <th>Thời gian Đọc</th>
+              <th>Tốc độ Đọc</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge redis">Redis</span></td>
+              <td id="cmp-r-wms">—</td>
+              <td id="cmp-r-wops" style="font-weight:700;color:var(--redis)">—</td>
+              <td id="cmp-r-rms">—</td>
+              <td id="cmp-r-rops" style="font-weight:700;color:var(--redis)">—</td>
+            </tr>
+            <tr>
+              <td><span class="badge mc">Memcached</span></td>
+              <td id="cmp-mc-wms">—</td>
+              <td id="cmp-mc-wops" style="font-weight:700;color:var(--blue)">—</td>
+              <td id="cmp-mc-rms">—</td>
+              <td id="cmp-mc-rops" style="font-weight:700;color:var(--blue)">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Thử nghiệm 2: Cập nhật trường con (Partial Update vs Full Rewrite)</h2>
+        <p class="note">Bài toán: User Profile lớn (~1.2 KB, 10 thuộc tính). Cần tăng điểm tích lũy <b>points (+10 điểm)</b>.</p>
+        <button class="act" id="cmp-btn-struct">Thực hiện cập nhật điểm</button>
+        <div class="grid-2" id="cmp-struct-results" style="display:none">
+          <div class="box-stat" style="border-left: 4px solid var(--redis)">
+            <h4 style="color:var(--redis)">Redis (Native Hash: HINCRBY)</h4>
+            <div class="big" id="cmp-struct-r-time">—</div>
+            <ul class="steplist">
+              <li><b>Số bước:</b> <span id="cmp-struct-r-steps">1 bước</span></li>
+              <li><b>Cơ chế:</b> Server tự tăng field trực tiếp trong RAM</li>
+              <li><b>Băng thông mạng:</b> <span id="cmp-struct-r-bytes">— bytes</span></li>
+              <li><b>Điểm sau khi tăng:</b> <span id="cmp-struct-r-points" style="font-weight:700;color:var(--green)">—</span></li>
+            </ul>
+          </div>
+          <div class="box-stat" style="border-left: 4px solid var(--blue)">
+            <h4 style="color:var(--blue)">Memcached (Raw String: GET/SET Full JSON)</h4>
+            <div class="big" id="cmp-struct-mc-time">—</div>
+            <ul class="steplist">
+              <li><b>Số bước:</b> <span id="cmp-struct-mc-steps">5 bước</span> (GET → Parse → Mod → Dump → SET)</li>
+              <li><b>Cơ chế:</b> Tải toàn bộ JSON lớn về client rồi đẩy lại</li>
+              <li><b>Băng thông mạng:</b> <span id="cmp-struct-mc-bytes">— bytes</span></li>
+              <li><b>Điểm sau khi tăng:</b> <span id="cmp-struct-mc-points" style="font-weight:700;color:var(--green)">—</span></li>
+            </ul>
+          </div>
+        </div>
+        <div class="caption" id="cmp-struct-summary" style="display:none;text-align:left;margin-top:12px;font-size:18px"></div>
+      </div>
+
+      <div class="card">
+        <h2>Trạng thái giám sát thời gian thực</h2>
+        <div class="grid-2">
+          <div class="box-stat" style="border-top:4px solid var(--redis)">
+            <h3 style="margin:0 0 8px;color:var(--redis)">Redis Server (Port 6379)</h3>
+            <div id="cmp-live-redis">Đang tải thông tin...</div>
+          </div>
+          <div class="box-stat" style="border-top:4px solid var(--blue)">
+            <h3 style="margin:0 0 8px;color:var(--blue)">Memcached Server (Port 11211)</h3>
+            <div id="cmp-live-mc">Đang tải thông tin...</div>
+          </div>
+        </div>
       </div>
     </section>
   </div>
@@ -475,6 +619,158 @@ document.querySelectorAll("[data-race]").forEach(btn => btn.onclick = async () =
   const st = await raceState(); renderRace(st);
   buttons.forEach(b => b.disabled = false);
 });
+
+// ---------- 4. SO SÁNH REDIS VS MEMCACHED ----------
+async function refreshCompareLive() {
+  try {
+    const res = await (await fetch("/demo/compare/stats")).json();
+    const r = res.redis, mc = res.memcached;
+
+    // Render Redis
+    $("cmp-live-redis").innerHTML = `
+      <ul class="steplist">
+        <li><b>Trạng thái:</b> <span class="badge ok" style="font-size:14px;padding:2px 8px">Online</span></li>
+        <li><b>Phiên bản:</b> ${r.version}</li>
+        <li><b>RAM sử dụng:</b> <b>${fmt(r.used_memory_mb)} MB</b></li>
+        <li><b>Tổng số keys:</b> <b>${fmt(r.total_keys)}</b></li>
+        <li><b>Mô hình:</b> ${r.threading}</li>
+        <li><b>Lưu trữ bền vững:</b> ${r.persistence}</li>
+        <li><b>Cấu trúc dữ liệu:</b> ${r.data_structures}</li>
+      </ul>
+    `;
+
+    // Render Memcached
+    if (mc.status === "online") {
+      $("cmp-live-mc").innerHTML = `
+        <ul class="steplist">
+          <li><b>Trạng thái:</b> <span class="badge ok" style="font-size:14px;padding:2px 8px">Online</span></li>
+          <li><b>Phiên bản:</b> ${mc.version}</li>
+          <li><b>RAM sử dụng:</b> <b>${fmt(mc.used_memory_mb)} MB</b></li>
+          <li><b>Tổng số items:</b> <b>${fmt(mc.curr_items)}</b></li>
+          <li><b>Worker Threads:</b> <b>${mc.threads} threads</b></li>
+          <li><b>Lưu trữ bền vững:</b> ${mc.persistence}</li>
+          <li><b>Cấu trúc dữ liệu:</b> ${mc.data_structures}</li>
+        </ul>
+      `;
+    } else {
+      $("cmp-live-mc").innerHTML = `
+        <div style="color:var(--red);margin-top:8px">
+          <span class="badge err" style="font-size:14px;padding:2px 8px">Offline</span> ${mc.error || "Chưa kết nối"}
+          <div class="note">Chạy bằng Docker: <code>docker compose up --build</code></div>
+        </div>
+      `;
+    }
+  } catch (e) {
+    if ($("cmp-live-redis")) $("cmp-live-redis").textContent = "Không tải được thống kê.";
+    if ($("cmp-live-mc")) $("cmp-live-mc").textContent = "Không tải được thống kê.";
+  }
+}
+
+setInterval(refreshCompareLive, 3000);
+refreshCompareLive();
+
+// Thử nghiệm 1: Benchmark tốc độ
+async function runSpeedTest(n) {
+  const cap = $("cmp-speed-caption");
+  const tbl = $("cmp-speed-table");
+  const b500 = $("cmp-btn-500"), b1000 = $("cmp-btn-1000");
+  b500.disabled = true; b1000.disabled = true;
+  cap.innerHTML = `⏳ Đang thực hiện ghi & đọc <b>${fmt(n)}</b> items vào Redis và Memcached... Vui lòng đợi trong giây lát...`;
+  tbl.style.display = "none";
+
+  try {
+    const res = await (await fetch(`/demo/compare/speed?n=${n}`, { method: "POST" })).json();
+    tbl.style.display = "table";
+
+    // Redis
+    $("cmp-r-wms").textContent = `${res.redis.write_ms} ms`;
+    $("cmp-r-wops").textContent = `${fmt(res.redis.write_ops)} ops/s`;
+    $("cmp-r-rms").textContent = `${res.redis.read_ms} ms`;
+    $("cmp-r-rops").textContent = `${fmt(res.redis.read_ops)} ops/s`;
+
+    // Memcached
+    if (res.memcached.status === "ok") {
+      $("cmp-mc-wms").textContent = `${res.memcached.write_ms} ms`;
+      $("cmp-mc-wops").textContent = `${fmt(res.memcached.write_ops)} ops/s`;
+      $("cmp-mc-rms").textContent = `${res.memcached.read_ms} ms`;
+      $("cmp-mc-rops").textContent = `${fmt(res.memcached.read_ops)} ops/s`;
+
+      cap.innerHTML = `✅ Hoàn thành đo <b>${fmt(n)}</b> items! Cả hai hệ thống đều xử lý trong bộ nhớ RAM cực nhanh với độ trễ dưới 1 ms mỗi request.`;
+    } else {
+      $("cmp-mc-wms").textContent = "Lỗi kết nối";
+      $("cmp-mc-wops").textContent = "—";
+      $("cmp-mc-rms").textContent = "—";
+      $("cmp-mc-rops").textContent = "—";
+      cap.innerHTML = `⚠️ Redis hoàn thành đo tải. Memcached chưa phản hồi: ${res.memcached.error}`;
+    }
+  } catch (e) {
+    cap.innerHTML = `<span style="color:var(--red)">Lỗi khi chạy benchmark: ${e.message}</span>`;
+  } finally {
+    b500.disabled = false; b1000.disabled = false;
+    refreshCompareLive();
+  }
+}
+
+$("cmp-btn-500").onclick = () => runSpeedTest(500);
+$("cmp-btn-1000").onclick = () => runSpeedTest(1000);
+
+$("cmp-btn-flush").onclick = async () => {
+  const btn = $("cmp-btn-flush");
+  btn.disabled = true;
+  try {
+    const res = await (await fetch("/demo/compare/flush", { method: "POST" })).json();
+    $("cmp-speed-caption").innerHTML = `🧹 ${res.message} (Redis xóa: ${res.redis_keys_deleted} keys, ${res.memcached})`;
+    $("cmp-speed-table").style.display = "none";
+  } catch (e) {
+    $("cmp-speed-caption").textContent = "Lỗi xóa dữ liệu: " + e.message;
+  } finally {
+    btn.disabled = false;
+    refreshCompareLive();
+  }
+};
+
+// Thử nghiệm 2: Cập nhật trường con
+$("cmp-btn-struct").onclick = async () => {
+  const btn = $("cmp-btn-struct");
+  btn.disabled = true;
+  const resBox = $("cmp-struct-results");
+  const sumBox = $("cmp-struct-summary");
+
+  try {
+    const data = await (await fetch("/demo/compare/datastruct", { method: "POST" })).json();
+    resBox.style.display = "grid";
+    sumBox.style.display = "block";
+
+    // Redis
+    $("cmp-struct-r-time").textContent = `${data.redis.elapsed_us} µs (~${(data.redis.elapsed_us / 1000).toFixed(2)} ms)`;
+    $("cmp-struct-r-steps").textContent = `${data.redis.steps} bước (atomic trên server)`;
+    $("cmp-struct-r-bytes").textContent = `${data.redis.network_bytes} bytes`;
+    $("cmp-struct-r-points").textContent = `${data.redis.new_points} điểm`;
+
+    // Memcached
+    if (data.memcached.status === "ok") {
+      $("cmp-struct-mc-time").textContent = `${data.memcached.elapsed_us} µs (~${(data.memcached.elapsed_us / 1000).toFixed(2)} ms)`;
+      $("cmp-struct-mc-steps").textContent = `${data.memcached.steps} bước`;
+      $("cmp-struct-mc-bytes").textContent = `${fmt(data.memcached.network_bytes)} bytes`;
+      $("cmp-struct-mc-points").textContent = `${data.memcached.new_points} điểm`;
+
+      sumBox.innerHTML = `
+        🚀 <b>Kết luận:</b> Redis tiết kiệm <b>${data.bandwidth_saved_percent}%</b> băng thông mạng (${data.redis.network_bytes} bytes vs ${fmt(data.memcached.network_bytes)} bytes)!<br>
+        <small style="color:var(--muted)">Với Redis Hash, ta chỉ gửi lệnh sửa trường cụ thể trực tiếp trên RAM server. Với Memcached, client bắt buộc phải truyền tải toàn bộ payload JSON qua lại giữa client và cache server.</small>
+      `;
+    } else {
+      $("cmp-struct-mc-time").textContent = "Memcached Offline";
+      $("cmp-struct-mc-bytes").textContent = "—";
+      $("cmp-struct-mc-points").textContent = "—";
+      sumBox.innerHTML = `Memcached chưa sẵn sàng: ${data.memcached.error}`;
+    }
+  } catch (e) {
+    alert("Lỗi cập nhật cấu trúc: " + e.message);
+  } finally {
+    btn.disabled = false;
+    refreshCompareLive();
+  }
+};
 </script>
 </body>
 </html>

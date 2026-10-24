@@ -6,7 +6,7 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY source_api.py demo.html connect_redis.py caching.py ./
+COPY source_api.py demo.html connect_redis.py caching.py compare_redis_memcached.py ./
 COPY bench/ bench/
 
 # lắng nghe 0.0.0.0 để truy cập được từ ngoài container; cổng do docker-compose.yml đặt
