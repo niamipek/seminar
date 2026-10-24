@@ -1,12 +1,13 @@
-# Seminar Redis: Caching · Session Storage · Lệch dữ liệu
+# Seminar Redis: Caching · Session Storage · Lệch dữ liệu · So sánh Memcached
 
-Trang web demo trực quan cho 3 ứng dụng của Redis:
+Trang web demo trực quan cho các ứng dụng và so sánh công nghệ cache:
 
 | Tab | Demo | Cho thấy điều gì |
 |---|---|---|
 | **1. Caching** | Lấy hồ sơ người dùng từ database thật (SQLite: 200.000 người dùng, 1 triệu đơn hàng), có và không có Redis | Cache HIT nhanh hơn MISS hàng trăm lần; Redis chứa ~140 MB vẫn lấy 1 key dưới 1 ms |
 | **2. Session storage** | 2 server (cổng 3000 và 3001) dùng chung Redis để lưu session | Đăng nhập ở Server A thì Server B vẫn nhận ra; lưu trong RAM riêng của từng server thì không |
 | **3. Lệch dữ liệu** | 2 request cùng sửa giá sản phẩm, 1 request bị chậm | "Set cache → ghi DB" và "Ghi DB → set cache" đều làm Redis lệch với DB; "Ghi DB → xóa cache" thì khớp |
+| **4. So sánh Redis vs Memcached** | Benchmark tốc độ đọc/ghi batch, cập nhật cấu trúc con (Hash vs String), giám sát realtime | So sánh toàn diện kiến trúc Single-thread vs Multi-thread, Native Data Structure vs Raw String, độ bền vững dữ liệu |
 
 Ngoài ra có phần **benchmark bằng k6** (tùy chọn, xem cuối file).
 
@@ -18,7 +19,7 @@ Ngoài ra có phần **benchmark bằng k6** (tùy chọn, xem cuối file).
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (đã bật)
 - [Git](https://git-scm.com/downloads)
 
-Không cần cài Python hay Redis: Docker lo hết.
+Không cần cài Python, Redis hay Memcached: Docker lo hết.
 
 ### Chạy
 ```powershell
@@ -31,11 +32,12 @@ Khi thấy các dòng `server-a-1 ... Uvicorn running on http://0.0.0.0:3000` th
 
 **http://localhost:3000/**
 
-Docker Compose chạy 4 thành phần:
+Docker Compose chạy 5 thành phần:
 
 | Thành phần | Vai trò | Địa chỉ |
 |---|---|---|
 | `redis` | Redis server | `localhost:6379` |
+| `memcached` | Memcached server | `localhost:11211` |
 | `seed` | Tạo database lần đầu, xong thì tự tắt (các lần sau bỏ qua) | — |
 | `server-a` | Server A | http://localhost:3000 |
 | `server-b` | Server B (dùng cho demo 2) | http://localhost:3001 |
@@ -100,12 +102,37 @@ A đổi giá sản phẩm 7 thành 100.000 nhưng **bị chậm 1,5 giây** gi�
 
 Dòng thời gian hiển thị từng bước kèm giá trị **thật** đọc từ Redis và DB ngay sau bước đó; bước đến muộn được tô đỏ.
 
-### Xem trực tiếp bên trong Redis
+### Tab 4: So sánh Redis vs Memcached
+Cả Redis và Memcached đều là hệ thống cache in-memory, nhưng khác nhau ở kiến trúc và tính năng.
+
+| # | Thao tác | Kết quả mong đợi |
+|---|---|---|
+| 1 | Xem **Bảng đối chiếu kỹ thuật cốt lõi** | 7 tiêu chí so sánh: Threading, Data Structure, Persistence, Value Size, Partial Update, Replication, Advanced Features |
+| 2 | **Chạy đo 500 items** hoặc **1.000 items** | Bảng so sánh thời gian ghi/đọc (ms) và throughput (ops/s) giữa Redis và Memcached — tốc độ tương đương nhau vì cùng in-memory |
+| 3 | **Thực hiện cập nhật điểm** | Redis dùng `HINCRBY` (1 bước, ~40 bytes) vs Memcached phải GET→Parse→Sửa→Dump→SET (5 bước, ~1200 bytes) — Redis tiết kiệm ~95% băng thông |
+| 4 | Xem **Trạng thái giám sát thời gian thực** | Thông tin live của cả 2 server: phiên bản, RAM, số key/items, mô hình threading, persistence |
+
+Kết luận chính:
+- **Tốc độ đọc/ghi đơn giản**: gần ngang nhau (cả hai đều in-memory).
+- **Cấu trúc dữ liệu phong phú**: Redis thắng tuyệt đối (Hash, List, Set, Sorted Set...) — cho phép thao tác trực tiếp trên server mà không cần tải toàn bộ dữ liệu về client.
+- **Độ bền vững (Persistence)**: Redis có RDB + AOF, Memcached mất sạch khi restart.
+- **Memcached phù hợp**: cache tĩnh đơn giản, cần tận dụng multi-thread trên nhiều CPU core.
+
+### Xem trực tiếp bên trong Redis và Memcached
 ```powershell
+# Redis
 docker compose exec redis redis-cli DBSIZE          # tổng số key
 docker compose exec redis redis-cli GET user:1      # hồ sơ người dùng 1 trong cache
 docker compose exec redis redis-cli TTL user:1      # còn sống bao nhiêu giây
 docker compose exec redis redis-cli INFO memory     # dòng used_memory_human: RAM đang dùng
+
+# Memcached
+docker compose exec memcached sh -c 'echo stats | nc localhost 11211'   # thống kê Memcached
+```
+
+### Chạy so sánh trên terminal (không cần trình duyệt)
+```powershell
+docker compose exec server-a python compare_redis_memcached.py
 ```
 
 ---
@@ -195,19 +222,20 @@ Import file `bench\postman_demo3.json` vào Postman: 5 request minh họa MISS (
 
 ```
 seminar/
-├── source_api.py         # server FastAPI: toàn bộ API cho 3 demo + benchmark
-├── demo.html             # trang demo (3 tab)
-├── requirements.txt      # thư viện Python
-├── Dockerfile            # đóng gói server
-├── docker-compose.yml    # Redis + seed + Server A + Server B
-├── connect_redis.py      # kiểm tra kết nối Redis
-├── caching.py            # ví dụ caching đơn giản chạy trên terminal
+├── source_api.py                # server FastAPI: toàn bộ API cho 4 demo + benchmark
+├── demo.html                    # trang demo (4 tab)
+├── compare_redis_memcached.py   # so sánh Redis vs Memcached chạy trên terminal
+├── requirements.txt             # thư viện Python
+├── Dockerfile                   # đóng gói server
+├── docker-compose.yml           # Redis + Memcached + seed + Server A + Server B
+├── connect_redis.py             # kiểm tra kết nối Redis
+├── caching.py                   # ví dụ caching đơn giản chạy trên terminal
 └── bench/
-    ├── seed_db.py        # tạo database SQLite (shop.db)
-    ├── check_db.py       # kiểm tra database đã tạo đúng chưa
-    ├── load.js           # kịch bản k6
-    ├── live.ps1          # benchmark trực tiếp (không Redis vs có Redis)
-    ├── run_bench.py      # benchmark đầy đủ, xuất bảng kết quả
+    ├── seed_db.py               # tạo database SQLite (shop.db)
+    ├── check_db.py              # kiểm tra database đã tạo đúng chưa
+    ├── load.js                  # kịch bản k6
+    ├── live.ps1                 # benchmark trực tiếp (không Redis vs có Redis)
+    ├── run_bench.py             # benchmark đầy đủ, xuất bảng kết quả
     └── postman_demo3.json
 ```
 `bench/shop.db` (database) và `.venv` không nằm trong repo: được tạo lại trên mỗi máy.

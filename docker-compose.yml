@@ -1,15 +1,17 @@
 # Chạy toàn bộ demo:  docker compose up --build   → mở http://localhost:3000/
 #
-#   redis     Redis server (cổng 6379)
-#   seed      tạo database SQLite lần đầu (~20-60 giây), các lần sau bỏ qua
-#   server-a  Server A  → http://localhost:3000
-#   server-b  Server B  → http://localhost:3001   (dùng cho demo 2: session dùng chung)
+#   redis      Redis server (cổng 6379)
+#   memcached  Memcached server (cổng 11211)
+#   seed       tạo database SQLite lần đầu (~20-60 giây), các lần sau bỏ qua
+#   server-a   Server A  → http://localhost:3000
+#   server-b   Server B  → http://localhost:3001   (dùng cho demo 2: session dùng chung)
 
 x-app: &app
   build: .
   image: redis-seminar:latest
   environment:
     REDIS_HOST: redis
+    MEMCACHED_HOST: memcached
     SHOP_DB: /data/shop.db
   volumes:
     - shopdata:/data
@@ -24,6 +26,11 @@ services:
       interval: 2s
       timeout: 3s
       retries: 15
+
+  memcached:
+    image: memcached:1.6-alpine
+    ports:
+      - "11211:11211"
 
   seed:
     <<: *app
@@ -40,6 +47,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      memcached:
+        condition: service_started
       seed:
         condition: service_completed_successfully
 
@@ -51,6 +60,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      memcached:
+        condition: service_started
       seed:
         condition: service_completed_successfully
 
