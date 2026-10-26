@@ -6,6 +6,7 @@ __pycache__/
 # database tạo lại được bằng: python bench/seed_db.py
 bench/shop.db
 bench/shop.db.tmp
+/shop.db
 *.db-journal
 
 # kết quả benchmark của từng máy

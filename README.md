@@ -108,8 +108,8 @@ Cả Redis và Memcached đều là hệ thống cache in-memory, nhưng khác n
 | # | Thao tác | Kết quả mong đợi |
 |---|---|---|
 | 1 | Xem **Bảng đối chiếu kỹ thuật cốt lõi** | 7 tiêu chí so sánh: Threading, Data Structure, Persistence, Value Size, Partial Update, Replication, Advanced Features |
-| 2 | **Chạy đo 500 items** hoặc **1.000 items** | Bảng so sánh thời gian ghi/đọc (ms) và throughput (ops/s) giữa Redis và Memcached — tốc độ tương đương nhau vì cùng in-memory |
-| 3 | **Thực hiện cập nhật điểm** | Redis dùng `HINCRBY` (1 bước, ~40 bytes) vs Memcached phải GET→Parse→Sửa→Dump→SET (5 bước, ~1200 bytes) — Redis tiết kiệm ~95% băng thông |
+| 2 | **1.000 / 10.000 / 100.000 lượt xem** | Mô phỏng N lượt xem trang sản phẩm thật: SQLite (truy vấn nặng ~100 ms, ước tính từ 20 lần đo) vs Redis vs Memcached (đo thật qua socket). Cả hai cache nhanh hơn DB ~1.700 lần, chênh nhau chỉ vài % |
+| 3 | Nhập user ID + tên mới, bấm **Đổi tên** | Hồ sơ user thật từ SQLite (users + đơn hàng). Redis dùng `HSET` sửa đúng 1 trường (1 bước, ~70 byte) vs Memcached phải GET→Parse→Sửa→Dump→SET cả hồ sơ (5 bước, ~1.700 byte với user 1). Hiện từng bước và số byte thật đi trên mạng |
 | 4 | Xem **Trạng thái giám sát thời gian thực** | Thông tin live của cả 2 server: phiên bản, RAM, số key/items, mô hình threading, persistence |
 
 Kết luận chính:

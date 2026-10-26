@@ -150,12 +150,12 @@ Cuộn qua bảng 7 tiêu chí, nhấn mạnh 2 điểm:
 - **Persistence**: Redis khôi phục được, Memcached mất hết
 
 ### Bước 3: Demo tốc độ (1 phút)
-Bấm **"Chạy đo 500 items"**, chờ kết quả, nhận xét:
-> "Tốc độ GET/SET đơn giản gần ngang nhau — Memcached nhỉnh hơn chút vì protocol đơn giản và multi-threaded. Nhưng xem thử nghiệm 2..."
+Bấm **"100.000 lượt xem"** (chờ ~15 giây), chỉ vào thanh ngang, nhận xét:
+> "100.000 lượt khách xem trang sản phẩm. Nếu lần nào cũng truy vấn database thì mất gần 3 tiếng. Redis và Memcached chỉ mất khoảng 6 giây, nhanh hơn khoảng 1.700 lần. Còn giữa Redis và Memcached thì gần như ngang nhau, chênh vài phần trăm. Vậy chọn Redis không bị thiệt về tốc độ. Khác nhau ở đâu? Mời xem thử nghiệm 2..."
 
 ### Bước 4: Demo cấu trúc dữ liệu — ĐIỂM NHẤN (2 phút)
-Bấm **"Thực hiện cập nhật điểm"**, chỉ vào kết quả:
-> "Cùng bài toán: tăng 10 điểm cho user. Redis chỉ cần 1 lệnh HINCRBY, tốn 39 bytes. Memcached phải tải toàn bộ JSON về, sửa, rồi đẩy lại — tốn 826 bytes, gấp 21 lần! Redis tiết kiệm 95% băng thông."
+Để user ID = 1, tên mới "Nguyễn Văn C", bấm **"Đổi tên"**, chỉ vào từng bước:
+> "Cùng bài toán: đổi tên user Nguyen Van A thành Nguyễn Văn C. Redis lưu hồ sơ dạng Hash nên chỉ cần 1 lệnh HSET sửa đúng trường name, khoảng 70 byte. Memcached chỉ thấy 1 chuỗi JSON, nên phải tải cả hồ sơ về, sửa, rồi đẩy cả hồ sơ lên lại — khoảng 1.700 byte, gấp khoảng 25 lần. Hồ sơ càng lớn thì chênh lệch càng lớn."
 
 ### Bước 5: Kết luận (30 giây)
 > "Tóm lại: nếu chỉ cần cache đơn giản thì Memcached đủ rồi. Nhưng khi cần cấu trúc dữ liệu phức tạp, persistence, pub/sub — Redis là lựa chọn toàn diện hơn. Đó cũng là lý do Redis phổ biến hơn nhiều trong thực tế."
@@ -164,8 +164,8 @@ Bấm **"Thực hiện cập nhật điểm"**, chỉ vào kết quả:
 
 ## 5. Câu hỏi có thể bị hỏi và cách trả lời
 
-**Q: "Memcached ghi nhanh hơn Redis, tại sao không dùng Memcached?"**
-> A: Đúng, với thao tác GET/SET đơn giản thì Memcached nhỉnh hơn chút. Nhưng trong thực tế, ứng dụng thường cần thao tác phức tạp hơn (sửa 1 trường, thêm vào danh sách, đếm số lượng...). Lúc đó Redis nhanh hơn hàng trăm lần vì xử lý ngay trên server, không cần truyền dữ liệu qua lại.
+**Q: "Memcached nhanh hơn Redis một chút, tại sao không dùng Memcached?"**
+> A: Với GET/SET đơn giản thì hai bên gần như ngang nhau (chênh vài phần trăm, khoảng 0,005 ms mỗi lệnh). Nhưng trong thực tế, ứng dụng thường cần thao tác phức tạp hơn (sửa 1 trường, thêm vào danh sách, đếm số lượng...). Lúc đó Redis nhanh hơn hàng trăm lần vì xử lý ngay trên server, không cần truyền dữ liệu qua lại.
 
 **Q: "Redis single-thread thì có chậm không khi nhiều người dùng?"**
 > A: Không. Redis xử lý ~100.000+ request/giây trên 1 thread nhờ I/O multiplexing (epoll/kqueue). Đa số ứng dụng không bao giờ đạt tới giới hạn này. Nếu cần scale, dùng Redis Cluster để chia tải.

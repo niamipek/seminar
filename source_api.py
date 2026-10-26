@@ -1,6 +1,8 @@
 import json
 import os
+import random
 import secrets
+import socket
 import sqlite3
 import threading
 import time
@@ -448,150 +450,230 @@ def compare_stats():
     return {"redis": redis_data, "memcached": mc_data}
 
 
-@app.post("/demo/compare/speed")
-def compare_speed(n: int = 500):
-    """Đo thời gian ghi và đọc tuần tự n items để so sánh latency và ops/sec."""
-    n = max(10, min(n, 2000))
-    data = {f"cmp_k_{i}": f"sample_val_{i}_{time.time()}" for i in range(n)}
+PAGE_TTL = 600     # giây
+DB_SAMPLE = 20     # số truy vấn SQLite đo thật; nhân lên để ước tính n lượt (mỗi lượt ~100 ms)
 
-    # 1. Đo Redis
-    t0 = time.perf_counter()
-    for k, v in data.items():
-        r.set(k, v, ex=120)
-    r_w_time = (time.perf_counter() - t0) * 1000
 
-    t0 = time.perf_counter()
-    for k in data.keys():
-        _ = r.get(k)
-    r_r_time = (time.perf_counter() - t0) * 1000
+def _redis_get_raw(sock: socket.socket, cmd: bytes) -> bytes:
+    """Gửi 1 lệnh GET (RESP) và đọc trọn bulk reply "$<len>\\r\\n<data>\\r\\n"."""
+    sock.sendall(cmd)
+    buf = b""
+    while b"\r\n" not in buf:
+        buf += sock.recv(65536)
+    header, _, _ = buf.partition(b"\r\n")
+    size = int(header[1:])
+    need = len(header) + 2 + (size + 2 if size >= 0 else 0)
+    while len(buf) < need:
+        buf += sock.recv(65536)
+    return buf
 
-    # Dọn dẹp key Redis
+
+def _warm_page_cache() -> bool:
+    """Nạp trang của mọi sản phẩm vào cả Redis và Memcached nếu còn thiếu. Không tính vào phép đo."""
+    keys = [f"cmp_page:{i}" for i in range(1, 1001)]
+    if r.exists(*keys) == len(keys) and len(mc.get_many(keys)) == len(keys):
+        return False
+    pages = build_all_product_pages()
+    data = {f"cmp_page:{pid}": json.dumps(p, ensure_ascii=False).encode() for pid, p in pages.items()}
     pipe = r.pipeline(transaction=False)
-    for k in data.keys():
-        pipe.delete(k)
+    for k, v in data.items():
+        pipe.set(k, v, ex=PAGE_TTL)
     pipe.execute()
-
-    # 2. Đo Memcached
-    mc_ok, _ = check_memcached_ok()
-    if mc_ok:
-        try:
-            t0 = time.perf_counter()
-            for k, v in data.items():
-                mc.set(k, v, expire=120, noreply=False)
-            mc_w_time = (time.perf_counter() - t0) * 1000
-
-            t0 = time.perf_counter()
-            for k in data.keys():
-                _ = mc.get(k)
-            mc_r_time = (time.perf_counter() - t0) * 1000
-
-            for k in data.keys():
-                mc.delete(k, noreply=False)
-
-            mc_result = {
-                "status": "ok",
-                "write_ms": round(mc_w_time, 2),
-                "read_ms": round(mc_r_time, 2),
-                "write_ops": round(n / (mc_w_time / 1000)) if mc_w_time > 0 else 0,
-                "read_ops": round(n / (mc_r_time / 1000)) if mc_r_time > 0 else 0,
-            }
-        except Exception as e:
-            mc_result = {"status": "error", "error": str(e)}
-    else:
-        mc_result = {"status": "error", "error": "Memcached chưa sẵn sàng"}
-
-    return {
-        "n": n,
-        "redis": {
-            "status": "ok",
-            "write_ms": round(r_w_time, 2),
-            "read_ms": round(r_r_time, 2),
-            "write_ops": round(n / (r_w_time / 1000)) if r_w_time > 0 else 0,
-            "read_ops": round(n / (r_r_time / 1000)) if r_r_time > 0 else 0,
-        },
-        "memcached": mc_result
-    }
+    mc.set_many(data, expire=PAGE_TTL)
+    return True
 
 
-@app.post("/demo/compare/datastruct")
-def compare_datastruct():
-    """So sánh: Cập nhật 1 trường (partial update) trong một User Profile lớn."""
-    profile = {
-        "id": "1001",
-        "name": "Nguyen Van A",
-        "email": "nguyenvana@example.com",
-        "city": "Ho Chi Minh",
-        "address": "123 Le Loi, Quan 1, TP.HCM",
-        "points": 1500,
-        "level": "Gold Member",
-        "bio": "Khách hàng thân thiết từ năm 2021, có 45 đơn hàng.",
-        "preferences": "Đồ công nghệ, giao hàng nhanh, thông báo SMS.",
-        "security_tags": "verified, 2fa_enabled, phone_confirmed"
-    }
+@app.post("/demo/compare/speed")
+def compare_speed(n: int = 10_000):
+    """n lượt xem trang sản phẩm ngẫu nhiên: SQLite (truy vấn nặng) vs Redis vs Memcached.
+    Hai cache được đo thật qua socket (cùng cách gửi lệnh, không lệch do thư viện client);
+    SQLite đo thật DB_SAMPLE lượt rồi nhân lên, vì chạy hết n lượt sẽ mất hàng giờ."""
+    n = max(100, min(n, 100_000))
+    ok, err = check_memcached_ok()
+    if not ok:
+        raise HTTPException(status_code=503, detail=f"Memcached chưa sẵn sàng: {err}")
+    try:
+        product_count = _db().execute("SELECT COUNT(*) FROM products").fetchone()[0]
+        t0 = time.perf_counter()
+        warmed = _warm_page_cache()
+        warm_ms = round((time.perf_counter() - t0) * 1000)
+    except sqlite3.Error as e:
+        raise HTTPException(status_code=503, detail=f"Chưa đọc được database SQLite ({e}). Chạy: python bench/seed_db.py")
 
-    # 1. Thao tác trên Redis (dùng Native Hash)
-    r_key = "profile:hash:1001"
-    r.hset(r_key, mapping={k: str(v) for k, v in profile.items()})
+    rng = random.Random(42)  # cả 3 bên xem đúng cùng 1 dãy sản phẩm
+    ids = [rng.randint(1, product_count) for _ in range(n)]
 
+    # 1. SQLite: chạy thật DB_SAMPLE truy vấn nặng
     t0 = time.perf_counter()
-    new_points = r.hincrby(r_key, "points", 10)
-    r_elapsed_us = round((time.perf_counter() - t0) * 1_000_000, 2)
-    r_network_bytes = len("HINCRBY profile:hash:1001 points 10") + len(str(new_points))
+    for pid in ids[:DB_SAMPLE]:
+        _product_page(pid)
+    db_avg_ms = (time.perf_counter() - t0) * 1000 / DB_SAMPLE
 
-    # 2. Thao tác trên Memcached (String JSON)
-    mc_ok, _ = check_memcached_ok()
-    if mc_ok:
+    def measure(host, port, cmds, get_one):
+        s = _connect(host, port)
         try:
-            mc_key = "profile:json:1001"
-            initial_json = json.dumps(profile, ensure_ascii=False)
-            mc.set(mc_key, initial_json.encode("utf-8"))
-
+            received = hits = 0
             t0 = time.perf_counter()
-            # Bước 1: GET toàn bộ JSON lớn về
-            raw_data = mc.get(mc_key)
-            # Bước 2: Parse JSON
-            obj = json.loads(raw_data if isinstance(raw_data, str) else raw_data.decode("utf-8"))
-            # Bước 3: Sửa trường points
-            obj["points"] += 10
-            # Bước 4: Dump JSON
-            updated_json = json.dumps(obj, ensure_ascii=False)
-            # Bước 5: SET toàn bộ JSON lớn trở lại
-            mc.set(mc_key, updated_json.encode("utf-8"))
-            mc_elapsed_us = round((time.perf_counter() - t0) * 1_000_000, 2)
+            for cmd in cmds:
+                reply = get_one(s, cmd)
+                received += len(reply)
+                hits += len(reply) > 10  # trả về "$-1\r\n" / "END\r\n" là miss
+            total_ms = (time.perf_counter() - t0) * 1000
+        finally:
+            s.close()
+        return {"total_ms": round(total_ms, 1), "avg_us": round(total_ms * 1000 / n, 1),
+                "ops": round(n / (total_ms / 1000)), "hits": hits, "bytes": received}
 
-            raw_len = len(raw_data) if isinstance(raw_data, (bytes, str)) else 0
-            updated_bytes = updated_json.encode("utf-8")
-            mc_network_bytes = (len(f"get {mc_key}\r\n") + raw_len +
-                                len(f"set {mc_key} 0 0 {len(updated_bytes)}\r\n") +
-                                len(updated_bytes) + len(b"STORED\r\n"))
+    # 2. Redis và 3. Memcached: lệnh được mã hóa sẵn trước khi bấm giờ
+    redis_res = measure(os.getenv("REDIS_HOST", "localhost"), int(os.getenv("REDIS_PORT", "6379")),
+                        [_resp("GET", f"cmp_page:{i}") for i in ids], _redis_get_raw)
+    mc_res = measure(MC_HOST, MC_PORT, [f"get cmp_page:{i}\r\n".encode() for i in ids],
+                     lambda s, cmd: _exchange(s, cmd, b"END\r\n"))
 
-            mc_info = {
-                "status": "ok",
-                "method": "5 bước: GET full JSON -> Parse dict -> Sửa field -> Dump JSON -> SET full JSON",
-                "steps": 5,
-                "network_bytes": mc_network_bytes,
-                "elapsed_us": mc_elapsed_us,
-                "new_points": obj["points"]
-            }
-        except Exception as e:
-            mc_info = {"status": "error", "error": str(e)}
-    else:
-        mc_info = {"status": "error", "error": "Memcached chưa sẵn sàng"}
+    db_total_ms = db_avg_ms * n
+    for res in (redis_res, mc_res):
+        res["vs_db"] = round(db_total_ms / res["total_ms"])
+    return {
+        "n": n, "product_count": product_count, "warmed": warmed, "warm_ms": warm_ms,
+        "sqlite": {"sample": DB_SAMPLE, "avg_ms": round(db_avg_ms, 1), "total_ms": round(db_total_ms),
+                   "ops": round(1000 / db_avg_ms, 1)},
+        "redis": redis_res,
+        "memcached": mc_res,
+    }
 
-    saved_bytes = (mc_info.get("network_bytes", 1200) - r_network_bytes) if mc_info.get("status") == "ok" else 0
-    saved_percent = round((saved_bytes / mc_info["network_bytes"]) * 100, 1) if mc_info.get("status") == "ok" and mc_info.get("network_bytes", 0) > 0 else 0
+
+USER_FIELDS = ("id", "name", "email", "phone", "city", "address", "created_at")
+PROFILE_TTL = 600  # giây
+
+
+def load_user_profile(user_id: int) -> dict:
+    """Hồ sơ user thật từ SQLite: thông tin trong bảng users + tối đa 20 đơn hàng gần nhất."""
+    row = _db().execute(f"SELECT {', '.join(USER_FIELDS)} FROM users WHERE id = ?", (user_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Không có user id={user_id}")
+    orders = _db().execute("""
+        SELECT o.id, o.created_at, p.name, o.amount FROM orders o JOIN products p ON p.id = o.product_id
+        WHERE o.user_id = ? ORDER BY o.created_at DESC LIMIT 20""", (user_id,)).fetchall()
+    profile = dict(zip(USER_FIELDS, row))
+    profile["orders"] = [{"id": o[0], "date": o[1], "product": o[2], "amount": o[3]} for o in orders]
+    return profile
+
+
+def _resp(*args) -> bytes:
+    """Mã hóa 1 lệnh Redis theo giao thức RESP (đúng các byte redis-py gửi lên mạng)."""
+    out = b"*%d\r\n" % len(args)
+    for a in args:
+        a = a if isinstance(a, bytes) else str(a).encode()
+        out += b"$%d\r\n%s\r\n" % (len(a), a)
+    return out
+
+
+def _exchange(sock: socket.socket, payload: bytes, end: bytes) -> bytes:
+    """Gửi payload rồi đọc phản hồi đến khi gặp `end`; trả về đúng các byte nhận được."""
+    sock.sendall(payload)
+    buf = b""
+    while not buf.endswith(end):
+        chunk = sock.recv(65536)
+        if not chunk:
+            raise ConnectionError("server đóng kết nối")
+        buf += chunk
+    return buf
+
+
+def _connect(host: str, port: int) -> socket.socket:
+    s = socket.create_connection((host, port), timeout=2)
+    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    return s
+
+
+def _step(label, up, down, t0):
+    return {"label": label, "bytes_up": up, "bytes_down": down,
+            "us": round((time.perf_counter() - t0) * 1_000_000, 1)}
+
+
+@app.post("/demo/compare/rename")
+def compare_rename(user_id: int = 1, name: str = "Nguyễn Văn C"):
+    """Đổi tên 1 user trong cache: Redis sửa đúng 1 trường của Hash,
+    Memcached phải tải cả hồ sơ JSON về, sửa, rồi ghi lại toàn bộ.
+    Lệnh được gửi trực tiếp qua socket để đếm chính xác số byte đi trên mạng."""
+    name = name.strip()
+    if not name or len(name) > 60:
+        raise HTTPException(status_code=400, detail="Tên mới phải có 1-60 ký tự")
+    ok, err = check_memcached_ok()
+    if not ok:
+        raise HTTPException(status_code=503, detail=f"Memcached chưa sẵn sàng: {err}")
+
+    key = f"cmp_user:{user_id}"
+    # Cache-aside: lần đầu (hoặc khi 1 trong 2 cache mất key) nạp hồ sơ từ SQLite vào cả hai. Không tính vào phép đo.
+    seeded = False
+    if not r.exists(key) or not mc.touch(key, PROFILE_TTL, noreply=False):  # touch: kiểm tra key mà không tải dữ liệu về
+        profile = load_user_profile(user_id)
+        r.delete(key)
+        r.hset(key, mapping={k: json.dumps(v, ensure_ascii=False) if k == "orders" else str(v)
+                             for k, v in profile.items()})
+        r.expire(key, PROFILE_TTL)
+        mc.set(key, json.dumps(profile, ensure_ascii=False).encode(), expire=PROFILE_TTL)
+        seeded = True
+    redis_old = r.hget(key, "name").decode()
+    redis_fields_before = {k.decode(): v.decode() for k, v in r.hgetall(key).items()}
+
+    # 1. Redis: 1 lệnh HSET sửa đúng trường name ngay trên server
+    rs = _connect(os.getenv("REDIS_HOST", "localhost"), int(os.getenv("REDIS_PORT", "6379")))
+    try:
+        t_all = t0 = time.perf_counter()
+        cmd = _resp("HSET", key, "name", name)
+        reply = _exchange(rs, cmd, b"\r\n")
+        r_steps = [_step(f'HSET {key} name "{name}" — server tự sửa đúng 1 trường', len(cmd), len(reply), t0)]
+        r_elapsed = round((time.perf_counter() - t_all) * 1_000_000, 1)
+    finally:
+        rs.close()
+
+    # 2. Memcached: GET cả hồ sơ -> parse -> sửa -> dump -> SET cả hồ sơ
+    ms = _connect(MC_HOST, MC_PORT)
+    try:
+        t_all = t0 = time.perf_counter()
+        cmd = f"get {key}\r\n".encode()
+        reply = _exchange(ms, cmd, b"END\r\n")
+        header, _, rest = reply.partition(b"\r\n")
+        raw_json = rest[:int(header.split()[3])]
+        mc_steps = [_step(f"GET {key} — tải cả hồ sơ về server ứng dụng", len(cmd), len(reply), t0)]
+
+        t0 = time.perf_counter()
+        obj = json.loads(raw_json)
+        mc_steps.append(_step("Parse JSON → object", 0, 0, t0))
+
+        t0 = time.perf_counter()
+        mc_old = obj["name"]
+        obj["name"] = name
+        mc_steps.append(_step(f'Sửa name: "{mc_old}" → "{name}"', 0, 0, t0))
+
+        t0 = time.perf_counter()
+        new_json = json.dumps(obj, ensure_ascii=False).encode()
+        mc_steps.append(_step("Dump object → JSON", 0, 0, t0))
+
+        t0 = time.perf_counter()
+        cmd = b"set %s 0 %d %d\r\n%s\r\n" % (key.encode(), PROFILE_TTL, len(new_json), new_json)
+        reply = _exchange(ms, cmd, b"\r\n")
+        mc_steps.append(_step(f"SET {key} — đẩy cả hồ sơ lên lại Memcached", len(cmd), len(reply), t0))
+        mc_elapsed = round((time.perf_counter() - t_all) * 1_000_000, 1)
+    finally:
+        ms.close()
+
+    def total(steps):
+        return sum(s["bytes_up"] + s["bytes_down"] for s in steps)
 
     return {
-        "task": "Tăng trường points (+10) trong hồ sơ User (10 thuộc tính, ~1.2 KB)",
-        "redis": {
-            "method": "1 bước duy nhất: HINCRBY profile:hash:1001 points 10 (thực thi trên RAM của server)",
-            "steps": 1,
-            "network_bytes": r_network_bytes,
-            "elapsed_us": r_elapsed_us,
-            "new_points": new_points
-        },
-        "memcached": mc_info,
-        "bandwidth_saved_percent": saved_percent
+        "user_id": user_id,
+        "new_name": name,
+        "seeded_from_db": seeded,
+        "order_count": len(obj["orders"]),
+        "profile_bytes": len(raw_json),
+        "redis": {"key": key, "old_name": redis_old, "fields_before": redis_fields_before,
+                  "steps": r_steps, "total_bytes": total(r_steps), "elapsed_us": r_elapsed,
+                  "name_after": r.hget(key, "name").decode()},
+        "memcached": {"key": key, "old_name": mc_old, "json_before": raw_json.decode(),
+                      "steps": mc_steps, "total_bytes": total(mc_steps), "elapsed_us": mc_elapsed,
+                      "name_after": json.loads(mc.get(key))["name"]},
     }
 
 
@@ -645,6 +727,10 @@ def _count(name: str):
 def query_product_page(product_id: int) -> dict:
     """Truy vấn NẶNG (~100 ms): thông tin + điểm đánh giá + 5 sản phẩm tương tự cùng danh mục."""
     _count("db_queries")
+    return _product_page(product_id)
+
+
+def _product_page(product_id: int) -> dict:
     row = _db().execute(PRODUCT_SQL, (product_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
@@ -652,6 +738,27 @@ def query_product_page(product_id: int) -> dict:
     return {"id": row[0], "name": row[1], "category": row[2], "price": row[3],
             "review_count": row[4], "avg_rating": row[5],
             "similar": [{"id": s[0], "name": s[1], "avg_rating": s[2]} for s in similar]}
+
+
+def build_all_product_pages() -> dict:
+    """Dựng trang của mọi sản phẩm trong 1 lần quét (~0,5 s), cho kết quả giống hệt query_product_page.
+    Dùng để nạp sẵn cache; nếu gọi query_product_page cho từng sản phẩm thì mất ~100 s."""
+    rows = _db().execute("""
+        SELECT p.id, p.name, p.category, p.price, COUNT(r.id), ROUND(AVG(r.rating), 2)
+        FROM products p LEFT JOIN reviews r ON r.product_id = p.id GROUP BY p.id""").fetchall()
+    by_cat = {}
+    for row in rows:
+        if row[4]:  # SIMILAR_SQL dùng JOIN: chỉ tính sản phẩm có đánh giá
+            by_cat.setdefault(row[2], []).append(row)
+    for items in by_cat.values():
+        items.sort(key=lambda x: (-x[5], -x[0]))  # hòa điểm: id giảm dần, giống thứ tự SQLite trả về
+    pages = {}
+    for row in rows:
+        similar = [s for s in by_cat.get(row[2], []) if s[0] != row[0]][:5]
+        pages[row[0]] = {"id": row[0], "name": row[1], "category": row[2], "price": row[3],
+                         "review_count": row[4], "avg_rating": row[5],
+                         "similar": [{"id": s[0], "name": s[1], "avg_rating": s[5]} for s in similar]}
+    return pages
 
 
 def query_product_light(product_id: int) -> dict:
