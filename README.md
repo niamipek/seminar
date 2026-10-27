@@ -23,7 +23,7 @@ Không cần cài Python, Redis hay Memcached: Docker lo hết.
 
 ### Chạy
 ```powershell
-git clone https://github.com/niamipek/seminar.git
+git clone <link repo>
 cd seminar
 docker compose up --build
 ```
@@ -75,9 +75,9 @@ Bấm **Xóa cache** trước nếu muốn bắt đầu từ trạng thái trố
 | 1 | Nhập mã người dùng (mặc định `1`) → **Lấy dữ liệu** | **CACHE MISS ~200 ms**: database quét 1 triệu đơn hàng, server tự lưu kết quả vào Redis (`user:1`, TTL 10 phút) |
 | 2 | Bấm **Lấy dữ liệu** lần nữa | **CACHE HIT ~1 ms**: lấy thẳng từ Redis, không gọi xuống database |
 | 3 | Bấm **Xóa cache** | Xóa cache hồ sơ vừa lưu; lần lấy tiếp theo sẽ quay lại CACHE MISS |
-| 4 | **① Truy vấn database 50 người** | Quét 50 người ngẫu nhiên trực tiếp từ database, mỗi người ~200 ms (không dùng Redis) |
-| 5 | **② Import dữ liệu Redis** | Mất ~20–30 giây nạp hồ sơ 200.000 người (cache warming) → Redis chứa ~200.000 key, ~145 MB |
-| 6 | **③ Truy vấn lại 50 người đó qua Redis** | 50/50 HIT, mỗi người ~1 ms. Bảng so sánh thời gian giữa ① và ③ hiện ra |
+| 4 | **Truy vấn database 50 người** | Quét 50 người ngẫu nhiên trực tiếp từ database, mỗi người ~200 ms (không dùng Redis) |
+| 5 | **Import dữ liệu Redis** | Mất ~20–30 giây nạp hồ sơ 200.000 người (cache warming) → Redis chứa ~200.000 key, ~145 MB |
+| 6 | **Truy vấn lại 50 người đó qua Redis** | 50/50 HIT, mỗi người ~1 ms. Bảng so sánh thời gian giữa ① và ③ hiện ra |
 
 Khung **"Bên trong Redis"** bên phải hiển thị trực tiếp một số key, TTL và tổng số key / RAM đang dùng.
 
@@ -104,7 +104,6 @@ Dòng thời gian hiển thị từng bước kèm giá trị **thật** đọc 
 ### Tab 4: So sánh Redis vs Memcached
 Cả Redis và Memcached đều là hệ thống cache in-memory, nhưng khác biệt lớn ở kiến trúc và cấu trúc dữ liệu.
 
-> 📘 Chi tiết về 7 tiêu chí so sánh chuyên sâu (Threading, Data Structure, Persistence...) và bộ câu hỏi phản biện xem tại: [redis_vs_memcached_guide.md](redis_vs_memcached_guide.md).
 
 | # | Thao tác | Kết quả mong đợi |
 |---|---|---|
@@ -183,25 +182,6 @@ Mở **http://localhost:3000/**.
 
 ---
 
-## 4. (Tùy chọn) Benchmark bằng k6
-
-Đo khả năng chịu tải: 50 người dùng ảo gửi request liên tục, so sánh có Redis và không có Redis.
-
-### Cài k6
-```powershell
-winget install GrafanaLabs.k6
-```
-Cài xong, **đóng hẳn và mở lại VS Code / terminal** để lệnh `k6` được nhận.
-
-### Chạy trực tiếp (50 người dùng × 10 giây, không Redis rồi có Redis)
-Cần server đang chạy ở cổng 3000 (bằng Docker hoặc thủ công), rồi:
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File bench\live.ps1
-```
-Đọc 3 dòng: `http_reqs` (số request/giây, càng cao càng tốt), `http_req_duration ... p(95)` (95% request xong trong bao lâu, càng thấp càng tốt) và dòng vàng (số lần truy vấn database, tỉ lệ cache hit).
-
-Số liệu tham khảo khi server chạy trong Docker (Docker được cấp 4 CPU): không Redis **~16 req/s**, có Redis **~325 req/s**. Chạy thủ công trên máy thật thường ra số cao hơn vì dùng được nhiều CPU hơn.
-
 ### Đo đầy đủ nhiều kịch bản (~25 phút)
 Cần làm **phần 3 (chạy thủ công)** trước đến hết bước 3 (có `.venv`, Redis, database). Script tự bật server riêng ở cổng 3900:
 ```powershell
@@ -210,12 +190,10 @@ python bench\run_bench.py --quick    # chạy thử, ~3 phút
 ```
 Kết quả: `bench\results\results.md` và `results.csv` (mở bằng Excel để vẽ biểu đồ).
 
-### Kiểm tra bằng Postman
-Import file `bench\postman_demo3.json` vào Postman: 5 request minh họa MISS (đi database) và HIT (lấy từ Redis), kèm thống kê số lần truy vấn database.
 
 ---
 
-## 5. Lỗi thường gặp
+## 4. Lỗi thường gặp
 
 | Hiện tượng | Cách xử lý |
 |---|---|
@@ -232,7 +210,7 @@ Import file `bench\postman_demo3.json` vào Postman: 5 request minh họa MISS (
 
 ---
 
-## 6. Cấu trúc thư mục
+## 5. Cấu trúc thư mục
 
 ```
 seminar/
@@ -253,4 +231,4 @@ seminar/
     ├── run_bench.py             # benchmark đầy đủ nhiều kịch bản, xuất báo cáo
     └── postman_demo3.json       # kịch bản test API bằng Postman
 ```
-`bench/shop.db` (database) và `.venv` không nằm trong repo: được tạo lại trên mỗi máy.
+
