@@ -23,8 +23,8 @@ Không cần cài Python, Redis hay Memcached: Docker lo hết.
 
 ### Chạy
 ```powershell
-git clone <link-repo-github>
-cd <tên-thư-mục-vừa-clone>
+git clone https://github.com/niamipek/seminar.git
+cd seminar
 docker compose up --build
 ```
 Lần đầu mất khoảng **1–3 phút** (tải image, cài thư viện, tạo database ~60 MB). Các lần sau chỉ khoảng 5 giây.
@@ -63,24 +63,23 @@ docker compose up
 
 ---
 
-## 2. Cách dùng 3 demo
+## 2. Cách dùng các demo (4 tab)
 
 Các con số dưới đây đo khi chạy bằng Docker; máy khác sẽ chênh một chút.
 
 ### Tab 1: Caching
-Bấm **Xóa cache** trước để bắt đầu từ trạng thái trống.
+Bấm **Xóa cache** trước nếu muốn bắt đầu từ trạng thái trống.
 
 | # | Thao tác | Kết quả mong đợi |
 |---|---|---|
-| 1 | Chọn "Nguyen Van A" → **Đăng nhập** | Hiện `session_id` (dùng tiếp ở tab 2), ô mã người dùng tự điền `1` |
-| 2 | **Lấy dữ liệu** | **CACHE MISS ~200 ms**: database quét 1 triệu đơn hàng, server tự lưu kết quả vào Redis (`user:1`) |
-| 3 | **Lấy dữ liệu** lần nữa | **CACHE HIT ~1 ms**: lấy thẳng từ Redis |
-| 4 | **① Truy vấn database 50 người** | 50 người ngẫu nhiên, mỗi người ~200 ms (không dùng Redis) |
-| 5 | **② Import dữ liệu Redis** | ~25 giây, nạp sẵn hồ sơ 200.000 người (cache warming) → Redis ~200.000 key, ~145 MB |
-| 6 | **③ Truy vấn lại 50 người đó qua Redis** | 50/50 HIT, mỗi người ~1 ms. Bảng so sánh ① và ③ hiện ra |
-| 7 | **Sang phần 2: Session →** | Chuyển sang tab 2, giữ nguyên session |
+| 1 | Nhập mã người dùng (mặc định `1`) → **Lấy dữ liệu** | **CACHE MISS ~200 ms**: database quét 1 triệu đơn hàng, server tự lưu kết quả vào Redis (`user:1`, TTL 10 phút) |
+| 2 | Bấm **Lấy dữ liệu** lần nữa | **CACHE HIT ~1 ms**: lấy thẳng từ Redis, không gọi xuống database |
+| 3 | Bấm **Xóa cache** | Xóa cache hồ sơ vừa lưu; lần lấy tiếp theo sẽ quay lại CACHE MISS |
+| 4 | **① Truy vấn database 50 người** | Quét 50 người ngẫu nhiên trực tiếp từ database, mỗi người ~200 ms (không dùng Redis) |
+| 5 | **② Import dữ liệu Redis** | Mất ~20–30 giây nạp hồ sơ 200.000 người (cache warming) → Redis chứa ~200.000 key, ~145 MB |
+| 6 | **③ Truy vấn lại 50 người đó qua Redis** | 50/50 HIT, mỗi người ~1 ms. Bảng so sánh thời gian giữa ① và ③ hiện ra |
 
-Khung **"Bên trong Redis"** bên phải hiển thị trực tiếp một số key, TTL và tổng số key / RAM.
+Khung **"Bên trong Redis"** bên phải hiển thị trực tiếp một số key, TTL và tổng số key / RAM đang dùng.
 
 ### Tab 2: Session storage
 | # | Thao tác | Kết quả mong đợi |
@@ -103,14 +102,14 @@ A đổi giá sản phẩm 7 thành 100.000 nhưng **bị chậm 1,5 giây** gi�
 Dòng thời gian hiển thị từng bước kèm giá trị **thật** đọc từ Redis và DB ngay sau bước đó; bước đến muộn được tô đỏ.
 
 ### Tab 4: So sánh Redis vs Memcached
-Cả Redis và Memcached đều là hệ thống cache in-memory, nhưng khác nhau ở kiến trúc và tính năng.
+Cả Redis và Memcached đều là hệ thống cache in-memory, nhưng khác biệt lớn ở kiến trúc và cấu trúc dữ liệu.
+
+> 📘 Chi tiết về 7 tiêu chí so sánh chuyên sâu (Threading, Data Structure, Persistence...) và bộ câu hỏi phản biện xem tại: [redis_vs_memcached_guide.md](redis_vs_memcached_guide.md).
 
 | # | Thao tác | Kết quả mong đợi |
 |---|---|---|
-| 1 | Xem **Bảng đối chiếu kỹ thuật cốt lõi** | 7 tiêu chí so sánh: Threading, Data Structure, Persistence, Value Size, Partial Update, Replication, Advanced Features |
-| 2 | **1.000 / 10.000 / 100.000 lượt xem** | Mô phỏng N lượt xem trang sản phẩm thật: SQLite (truy vấn nặng ~100 ms, ước tính từ 20 lần đo) vs Redis vs Memcached (đo thật qua socket). Cả hai cache nhanh hơn DB ~1.700 lần, chênh nhau chỉ vài % |
-| 3 | Nhập user ID + tên mới, bấm **Đổi tên** | Hồ sơ user thật từ SQLite (users + đơn hàng). Redis dùng `HSET` sửa đúng 1 trường (1 bước, ~70 byte) vs Memcached phải GET→Parse→Sửa→Dump→SET cả hồ sơ (5 bước, ~1.700 byte với user 1). Hiện từng bước và số byte thật đi trên mạng |
-| 4 | Xem **Trạng thái giám sát thời gian thực** | Thông tin live của cả 2 server: phiên bản, RAM, số key/items, mô hình threading, persistence |
+| 1 | **Thử nghiệm 1: Đo tốc độ đọc**<br>Bấm **1.000 / 10.000 / 100.000 lượt xem** | Mô phỏng N lượt xem trang sản phẩm thật: SQLite (truy vấn nặng ~100 ms, ước tính từ 20 lần đo) vs Redis vs Memcached (đo thật qua socket). Cả hai cache nhanh hơn DB ~1.700 lần, chênh nhau chỉ vài % (cùng in-memory). Nút **Dọn dẹp dữ liệu test** để xóa cache test. |
+| 2 | **Thử nghiệm 2: Cập nhật trường con (Partial Update vs Full Rewrite)**<br>Nhập User ID + Tên mới → bấm **Đổi tên** | Hồ sơ user thật từ SQLite (users + đơn hàng).<br>• **Redis** dùng `HSET` sửa đúng 1 trường (1 bước, ~70 byte qua mạng).<br>• **Memcached** phải GET → Parse → Sửa → Dump → SET cả hồ sơ (5 bước, ~1.700 byte với user 1).<br>Giao diện mô phỏng từng bước và số byte thật truyền tải qua mạng. |
 
 Kết luận chính:
 - **Tốc độ đọc/ghi đơn giản**: gần ngang nhau (cả hai đều in-memory).
@@ -132,7 +131,18 @@ docker compose exec memcached sh -c 'echo stats | nc localhost 11211'   # thốn
 
 ### Chạy so sánh trên terminal (không cần trình duyệt)
 ```powershell
+# Nếu chạy bằng Docker Compose:
 docker compose exec server-a python compare_redis_memcached.py
+
+# Nếu chạy thủ công (môi trường ảo đã kích hoạt, Redis & Memcached đang chạy):
+python compare_redis_memcached.py
+```
+
+### Ví dụ caching đơn giản trên terminal (caching.py)
+File `caching.py` minh họa cơ chế Cache-Aside nguyên bản. Mặc định script gọi server tại cổng `5000`:
+```powershell
+python source_api.py 5000     # terminal 1: bật server (hoặc đổi URL trong caching.py sang cổng 3000)
+python caching.py            # terminal 2: chạy demo đọc cache HIT / MISS
 ```
 
 ---
@@ -143,7 +153,7 @@ Dùng khi muốn sửa code và thấy thay đổi ngay (server tự reload).
 
 ### Cần cài
 - Python **3.12**
-- Docker Desktop (chỉ để chạy Redis)
+- Docker Desktop (để chạy Redis và Memcached)
 
 ### Các bước (PowerShell, trong thư mục dự án)
 ```powershell
@@ -152,8 +162,9 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-# 2. Redis (lần đầu dùng "docker run", các lần sau chỉ cần "docker start redis")
+# 2. Redis & Memcached (lần đầu dùng "docker run", các lần sau chỉ cần "docker start redis memcached")
 docker run -d --name redis -p 6379:6379 redis:7.4
+docker run -d --name memcached -p 11211:11211 memcached:1.6-alpine
 python connect_redis.py               # phải in ra: Response: True
 
 # 3. tạo database (~20–60 giây, chỉ cần làm 1 lần)
@@ -166,7 +177,9 @@ python source_api.py 3001             # terminal 2: Server B
 ```
 Mở **http://localhost:3000/**.
 
-Không chạy cùng lúc cách này với `docker compose up` (cả hai cùng dùng cổng 3000, 3001, 6379).
+*Lưu ý:*
+- Nếu chỉ test Demo 1, 2, 3 và không dùng Tab 4, bạn có thể bỏ qua bước chạy Memcached.
+- Không chạy cùng lúc cách này với `docker compose up` (cả hai cùng dùng cổng 3000, 3001, 6379, 11211).
 
 ---
 
@@ -206,9 +219,10 @@ Import file `bench\postman_demo3.json` vào Postman: 5 request minh họa MISS (
 
 | Hiện tượng | Cách xử lý |
 |---|---|
-| `docker compose up` báo cổng `6379` / `3000` / `3001` đã bị dùng | Tắt thứ đang chiếm cổng: container Redis cũ (`docker stop redis`) hoặc terminal đang chạy `python source_api.py` |
+| `docker compose up` báo cổng `6379` / `11211` / `3000` / `3001` đã bị dùng | Tắt thứ đang chiếm cổng: container Redis/Memcached cũ (`docker stop redis memcached`) hoặc terminal đang chạy `python source_api.py` |
 | `error during connect` / `Cannot connect to the Docker daemon` | Docker Desktop chưa bật, mở Docker Desktop và chờ đến khi chạy xong |
 | Trang báo "Không đọc được Redis" | Redis chưa chạy: `docker compose ps` để xem trạng thái |
+| Tab 4 báo Memcached Offline (chạy thủ công) | Memcached chưa chạy: `docker run -d --name memcached -p 11211:11211 memcached:1.6-alpine` |
 | `no such table: users` (chạy thủ công) | Chưa tạo database: tắt server, chạy `python bench\seed_db.py` |
 | `[WinError 10013]` khi chạy `python source_api.py` | Cổng đang bị chương trình khác chiếm (thường là server cũ chưa tắt) |
 | Trang vẫn hiện giao diện cũ | Nhấn **Ctrl+F5** |
@@ -223,19 +237,20 @@ Import file `bench\postman_demo3.json` vào Postman: 5 request minh họa MISS (
 ```
 seminar/
 ├── source_api.py                # server FastAPI: toàn bộ API cho 4 demo + benchmark
-├── demo.html                    # trang demo (4 tab)
-├── compare_redis_memcached.py   # so sánh Redis vs Memcached chạy trên terminal
+├── demo.html                    # trang demo giao diện trực quan (4 tab)
+├── redis_vs_memcached_guide.md  # tài liệu hướng dẫn chuyên sâu so sánh Redis vs Memcached
+├── compare_redis_memcached.py   # script so sánh Redis vs Memcached chạy trên terminal
 ├── requirements.txt             # thư viện Python
-├── Dockerfile                   # đóng gói server
+├── Dockerfile                   # đóng gói server FastAPI
 ├── docker-compose.yml           # Redis + Memcached + seed + Server A + Server B
-├── connect_redis.py             # kiểm tra kết nối Redis
-├── caching.py                   # ví dụ caching đơn giản chạy trên terminal
+├── connect_redis.py             # script kiểm tra kết nối Redis
+├── caching.py                   # ví dụ mẫu cơ chế Cache-Aside chạy trên terminal
 └── bench/
     ├── seed_db.py               # tạo database SQLite (shop.db)
     ├── check_db.py              # kiểm tra database đã tạo đúng chưa
-    ├── load.js                  # kịch bản k6
+    ├── load.js                  # kịch bản tải k6
     ├── live.ps1                 # benchmark trực tiếp (không Redis vs có Redis)
-    ├── run_bench.py             # benchmark đầy đủ, xuất bảng kết quả
-    └── postman_demo3.json
+    ├── run_bench.py             # benchmark đầy đủ nhiều kịch bản, xuất báo cáo
+    └── postman_demo3.json       # kịch bản test API bằng Postman
 ```
 `bench/shop.db` (database) và `.venv` không nằm trong repo: được tạo lại trên mỗi máy.
